@@ -7,14 +7,13 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-
 /*
 |--------------------------------------------------------------------------
 | HELPER
 |--------------------------------------------------------------------------
 */
 
-function e(?string $value): string
+function e($value): string
 {
     return htmlspecialchars(
         (string) $value,
@@ -23,340 +22,285 @@ function e(?string $value): string
     );
 }
 
+function requestTypeLabel(string $type): string
+{
+    return match ($type) {
+
+        'additional_smelter' =>
+            '<span class="badge bg-primary">Tambahan Smelter</span>',
+
+        'additional_team' =>
+            '<span class="badge bg-info text-dark">Tambahan Team</span>',
+
+        default =>
+            '<span class="badge bg-secondary">' . e($type) . '</span>',
+    };
+}
+
+function dashboardRoleBadge(string $role): string
+{
+    return match (strtolower($role)) {
+
+        'spv' =>
+            '<span class="badge bg-primary">SPV</span>',
+
+        'foreman' =>
+            '<span class="badge bg-info text-dark">Foreman</span>',
+
+        default =>
+            '<span class="badge bg-secondary">' . e($role) . '</span>',
+    };
+}
 
 /*
 |--------------------------------------------------------------------------
 | STATISTIK USER
 |--------------------------------------------------------------------------
-*/
-
-/*
-| Total user aktif + pending + suspended + rejected
-| Tidak menghitung deleted.
+|
+| Satu query untuk seluruh status user.
+|--------------------------------------------------------------------------
 */
 
 $stmt = $pdo->query("
-    SELECT COUNT(*) AS total
+    SELECT
+        COUNT(CASE WHEN status <> 'deleted' THEN 1 END) AS total_users,
+        COUNT(CASE WHEN status = 'pending' THEN 1 END) AS pending_users,
+        COUNT(CASE WHEN status = 'active' THEN 1 END) AS active_users,
+        COUNT(CASE WHEN status = 'suspended' THEN 1 END) AS suspended_users,
+        COUNT(CASE WHEN status = 'deleted' THEN 1 END) AS deleted_users
     FROM users
-    WHERE status <> 'deleted'
 ");
 
-$totalUsers = (int) $stmt->fetchColumn();
+$userStats = $stmt->fetch(PDO::FETCH_ASSOC);
+
+$totalUsers     = (int) ($userStats['total_users'] ?? 0);
+$pendingUsers   = (int) ($userStats['pending_users'] ?? 0);
+$activeUsers    = (int) ($userStats['active_users'] ?? 0);
+$suspendedUsers = (int) ($userStats['suspended_users'] ?? 0);
+$deletedUsers   = (int) ($userStats['deleted_users'] ?? 0);
 
 
 /*
 |--------------------------------------------------------------------------
-| PENDING REGISTRASI
+| STATISTIK USER PER ROLE
 |--------------------------------------------------------------------------
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-    FROM users
-    WHERE status = 'pending'
-");
-
-$pendingUsers = (int) $stmt->fetchColumn();
-
-
-/*
-|--------------------------------------------------------------------------
-| USER ACTIVE
-|--------------------------------------------------------------------------
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-    FROM users
-    WHERE status = 'active'
-");
-
-$activeUsers = (int) $stmt->fetchColumn();
-
-
-/*
-|--------------------------------------------------------------------------
-| USER SUSPENDED
-|--------------------------------------------------------------------------
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-    FROM users
-    WHERE status = 'suspended'
-");
-
-$suspendedUsers = (int) $stmt->fetchColumn();
-
-
-/*
-|--------------------------------------------------------------------------
-| USER DELETED
-|--------------------------------------------------------------------------
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-    FROM users
-    WHERE status = 'deleted'
-");
-
-$deletedUsers = (int) $stmt->fetchColumn();
-
-
-/*
-|--------------------------------------------------------------------------
-| SPV AKTIF
-|--------------------------------------------------------------------------
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-    FROM users u
-
-    INNER JOIN roles r
-        ON r.id = u.role_id
-
-    WHERE u.status = 'active'
-      AND LOWER(r.name) = 'spv'
-");
-
-$totalSpv = (int) $stmt->fetchColumn();
-
-
-/*
-|--------------------------------------------------------------------------
-| FOREMAN AKTIF
-|--------------------------------------------------------------------------
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-    FROM users u
-
-    INNER JOIN roles r
-        ON r.id = u.role_id
-
-    WHERE u.status = 'active'
-      AND LOWER(r.name) = 'foreman'
-");
-
-$totalForeman = (int) $stmt->fetchColumn();
-
-
-/*
-|--------------------------------------------------------------------------
-| STATISTIK ORGANISASI
-|--------------------------------------------------------------------------
-*/
-
-/*
-| Divisi aktif
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-    FROM divisions
-    WHERE status = 'active'
-");
-
-$totalDivisions = (int) $stmt->fetchColumn();
-
-
-/*
-| Smelter aktif
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-    FROM smelters
-    WHERE status = 'active'
-");
-
-$totalSmelters = (int) $stmt->fetchColumn();
-
-
-/*
-| Team aktif
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-    FROM teams
-    WHERE status = 'active'
-");
-
-$totalTeams = (int) $stmt->fetchColumn();
-
-
-/*
-|--------------------------------------------------------------------------
-| REQUEST AKSES - SPV TAMBAHAN SMELTER
-|--------------------------------------------------------------------------
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-
-    FROM access_requests ar
-
-    INNER JOIN users u
-        ON u.id = ar.user_id
-
-    INNER JOIN roles r
-        ON r.id = u.role_id
-
-    INNER JOIN smelters s
-        ON s.id = ar.smelter_id
-
-    WHERE ar.status = 'pending'
-      AND ar.request_type = 'additional_smelter'
-      AND LOWER(r.name) = 'spv'
-      AND u.status = 'active'
-      AND s.status = 'active'
-");
-
-$pendingSmelterRequests = (int) $stmt->fetchColumn();
-
-
-/*
-|--------------------------------------------------------------------------
-| REQUEST AKSES - FOREMAN TAMBAHAN TEAM
-| HANYA YANG BELUM ADA SPV
-|--------------------------------------------------------------------------
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-
-    FROM access_requests ar
-
-    INNER JOIN users u
-        ON u.id = ar.user_id
-
-    INNER JOIN roles r
-        ON r.id = u.role_id
-
-    INNER JOIN smelters s
-        ON s.id = ar.smelter_id
-
-    INNER JOIN teams t
-        ON t.id = ar.team_id
-
-    WHERE ar.status = 'pending'
-      AND ar.request_type = 'additional_team'
-      AND LOWER(r.name) = 'foreman'
-      AND u.status = 'active'
-      AND s.status = 'active'
-      AND t.status = 'active'
-
-      AND NOT EXISTS (
-
-          SELECT 1
-
-          FROM users spv
-
-          INNER JOIN roles spv_role
-              ON spv_role.id = spv.role_id
-
-          INNER JOIN user_access spv_access
-              ON spv_access.user_id = spv.id
-
-          WHERE LOWER(spv_role.name) = 'spv'
-            AND spv.status = 'active'
-            AND spv.division_id = u.division_id
-            AND spv_access.smelter_id = ar.smelter_id
-            AND spv_access.team_id IS NULL
-            AND spv_access.status = 'active'
-      )
-");
-
-$pendingTeamRequests = (int) $stmt->fetchColumn();
-
-
-/*
-|--------------------------------------------------------------------------
-| TOTAL REQUEST YANG PERLU DIPROSES ADMIN
-|--------------------------------------------------------------------------
-*/
-
-$totalAdminRequests =
-    $pendingSmelterRequests
-    +
-    $pendingTeamRequests;
-
-
-/*
-|--------------------------------------------------------------------------
-| REQUEST AKSES TOTAL
-|--------------------------------------------------------------------------
-*/
-
-$stmt = $pdo->query("
-    SELECT COUNT(*) AS total
-
-    FROM access_requests
-
-    WHERE status = 'pending'
-");
-
-$pendingAccessRequests = (int) $stmt->fetchColumn();
-
-
-/*
-|--------------------------------------------------------------------------
-| PENDING REGISTRASI PER ROLE
+|
+| Sekaligus mengambil:
+| - SPV aktif
+| - Foreman aktif
+| - SPV pending
+| - Foreman pending
 |--------------------------------------------------------------------------
 */
 
 $stmt = $pdo->query("
     SELECT
         LOWER(r.name) AS role_name,
-        COUNT(*) AS total
+
+        COUNT(
+            CASE
+                WHEN u.status = 'active'
+                THEN 1
+            END
+        ) AS active_total,
+
+        COUNT(
+            CASE
+                WHEN u.status = 'pending'
+                THEN 1
+            END
+        ) AS pending_total
 
     FROM users u
 
     INNER JOIN roles r
         ON r.id = u.role_id
 
-    WHERE u.status = 'pending'
+    WHERE LOWER(r.name) IN ('spv', 'foreman')
 
     GROUP BY LOWER(r.name)
 ");
 
-$pendingByRole = [
-    'spv'     => 0,
-    'foreman' => 0
+$roleStats = [
+    'spv' => [
+        'active'  => 0,
+        'pending' => 0,
+    ],
+    'foreman' => [
+        'active'  => 0,
+        'pending' => 0,
+    ],
 ];
 
-foreach (
-    $stmt->fetchAll(PDO::FETCH_ASSOC)
-    as $row
-) {
+foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
 
-    if (
-        isset(
-            $pendingByRole[
-                $row['role_name']
-            ]
-        )
-    ) {
+    $role = strtolower($row['role_name']);
 
-        $pendingByRole[
-            $row['role_name']
-        ] = (int) $row['total'];
+    if (!isset($roleStats[$role])) {
+        continue;
     }
+
+    $roleStats[$role]['active'] =
+        (int) $row['active_total'];
+
+    $roleStats[$role]['pending'] =
+        (int) $row['pending_total'];
 }
+
+$totalSpv = $roleStats['spv']['active'];
+$totalForeman = $roleStats['foreman']['active'];
+
+$pendingSpv = $roleStats['spv']['pending'];
+$pendingForeman = $roleStats['foreman']['pending'];
+
+$pendingByRole = [
+    'spv'     => $pendingSpv,
+    'foreman' => $pendingForeman,
+];
+
+
+/*
+|--------------------------------------------------------------------------
+| STATISTIK ORGANISASI
+|--------------------------------------------------------------------------
+|
+| Satu query untuk:
+| - Divisi aktif
+| - Smelter aktif
+| - Team aktif
+|--------------------------------------------------------------------------
+*/
+
+$stmt = $pdo->query("
+    SELECT
+
+        (
+            SELECT COUNT(*)
+            FROM divisions
+            WHERE status = 'active'
+        ) AS total_divisions,
+
+        (
+            SELECT COUNT(*)
+            FROM smelters
+            WHERE status = 'active'
+        ) AS total_smelters,
+
+        (
+            SELECT COUNT(*)
+            FROM teams
+            WHERE status = 'active'
+        ) AS total_teams
+");
+
+$organizationStats = $stmt->fetch(PDO::FETCH_ASSOC);
+
+$totalDivisions =
+    (int) ($organizationStats['total_divisions'] ?? 0);
+
+$totalSmelters =
+    (int) ($organizationStats['total_smelters'] ?? 0);
+
+$totalTeams =
+    (int) ($organizationStats['total_teams'] ?? 0);
+
+
+/*
+|--------------------------------------------------------------------------
+| REQUEST AKSES ADMIN
+|--------------------------------------------------------------------------
+|
+| Satu query untuk:
+| - Semua request pending
+| - Request tambahan Smelter SPV
+| - Request tambahan Team Foreman
+|   yang belum memiliki SPV aktif
+|--------------------------------------------------------------------------
+*/
+
+$stmt = $pdo->query("
+    SELECT
+
+        COUNT(*) AS total_pending,
+
+        COUNT(
+            CASE
+                WHEN ar.request_type = 'additional_smelter'
+                  AND LOWER(r.name) = 'spv'
+                  AND u.status = 'active'
+                  AND s.status = 'active'
+                THEN 1
+            END
+        ) AS pending_smelter,
+
+        COUNT(
+            CASE
+                WHEN ar.request_type = 'additional_team'
+                  AND LOWER(r.name) = 'foreman'
+                  AND u.status = 'active'
+                  AND s.status = 'active'
+                  AND t.status = 'active'
+
+                  AND NOT EXISTS (
+
+                      SELECT 1
+
+                      FROM users spv
+
+                      INNER JOIN roles spv_role
+                          ON spv_role.id = spv.role_id
+
+                      INNER JOIN user_access spv_access
+                          ON spv_access.user_id = spv.id
+
+                      WHERE LOWER(spv_role.name) = 'spv'
+                        AND spv.status = 'active'
+                        AND spv.division_id = u.division_id
+                        AND spv_access.smelter_id = ar.smelter_id
+                        AND spv_access.team_id IS NULL
+                        AND spv_access.status = 'active'
+                  )
+
+                THEN 1
+            END
+        ) AS pending_team
+
+    FROM access_requests ar
+
+    INNER JOIN users u
+        ON u.id = ar.user_id
+
+    INNER JOIN roles r
+        ON r.id = u.role_id
+
+    INNER JOIN smelters s
+        ON s.id = ar.smelter_id
+
+    LEFT JOIN teams t
+        ON t.id = ar.team_id
+
+    WHERE ar.status = 'pending'
+");
+
+$requestStats = $stmt->fetch(PDO::FETCH_ASSOC);
+
+$pendingAccessRequests =
+    (int) ($requestStats['total_pending'] ?? 0);
+
+$pendingSmelterRequests =
+    (int) ($requestStats['pending_smelter'] ?? 0);
+
+$pendingTeamRequests =
+    (int) ($requestStats['pending_team'] ?? 0);
+
+$totalAdminRequests =
+    $pendingSmelterRequests +
+    $pendingTeamRequests;
 
 
 /*
 |--------------------------------------------------------------------------
 | REQUEST TERBARU YANG PERLU DIPROSES ADMIN
-|--------------------------------------------------------------------------
-|
-| Hanya:
-| - additional_smelter SPV
-| - additional_team Foreman tanpa SPV aktif
 |--------------------------------------------------------------------------
 */
 
@@ -409,11 +353,8 @@ $stmt = $pdo->query("
 
           (
               ar.request_type = 'additional_smelter'
-
               AND LOWER(r.name) = 'spv'
-
               AND u.status = 'active'
-
               AND s.status = 'active'
           )
 
@@ -421,18 +362,14 @@ $stmt = $pdo->query("
 
           /*
           | Foreman tambahan Team
-          | hanya jika belum ada SPV
+          | Hanya jika belum ada SPV aktif
           */
 
           (
               ar.request_type = 'additional_team'
-
               AND LOWER(r.name) = 'foreman'
-
               AND u.status = 'active'
-
               AND s.status = 'active'
-
               AND t.status = 'active'
 
               AND NOT EXISTS (
@@ -462,81 +399,11 @@ $stmt = $pdo->query("
     LIMIT 10
 ");
 
-$latestRequests =
-    $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-
-/*
-|--------------------------------------------------------------------------
-| REQUEST TYPE LABEL
-|--------------------------------------------------------------------------
-*/
-
-function requestTypeLabel(string $type): string
-{
-    switch ($type) {
-
-        case 'additional_smelter':
-
-            return
-                '<span class="badge bg-primary">
-                    Tambahan Smelter
-                </span>';
-
-        case 'additional_team':
-
-            return
-                '<span class="badge bg-info text-dark">
-                    Tambahan Team
-                </span>';
-
-        default:
-
-            return
-                '<span class="badge bg-secondary">'
-                . e($type)
-                . '</span>';
-    }
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| ROLE BADGE
-|--------------------------------------------------------------------------
-*/
-
-function dashboardRoleBadge(string $role): string
-{
-    switch (strtolower($role)) {
-
-        case 'spv':
-
-            return
-                '<span class="badge bg-primary">
-                    SPV
-                </span>';
-
-        case 'foreman':
-
-            return
-                '<span class="badge bg-info text-dark">
-                    Foreman
-                </span>';
-
-        default:
-
-            return
-                '<span class="badge bg-secondary">'
-                . e($role)
-                . '</span>';
-    }
-}
+$latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 ?>
 
 <!DOCTYPE html>
-
 <html lang="id">
 
 <head>
@@ -550,12 +417,10 @@ function dashboardRoleBadge(string $role): string
 
     <title>Admin Dashboard</title>
 
-
     <link
         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
         rel="stylesheet"
     >
-
 
     <style>
 
@@ -612,12 +477,9 @@ function dashboardRoleBadge(string $role): string
             Smelter Management
         </a>
 
-
         <div class="text-white">
 
-            <?= e(
-                $_SESSION['name'] ?? 'Administrator'
-            ) ?>
+            <?= e($_SESSION['name'] ?? 'Administrator') ?>
 
             &nbsp; | &nbsp;
 
@@ -644,20 +506,15 @@ function dashboardRoleBadge(string $role): string
              SIDEBAR
         ================================================== -->
 
-        <div
-            class="col-md-2 bg-dark p-3 sidebar"
-        >
+        <aside class="col-md-2 bg-dark p-3 sidebar">
 
             <h5 class="text-white">
                 ADMIN
             </h5>
 
-
             <hr class="text-white">
 
-
             <div class="d-grid gap-2">
-
 
                 <a
                     href="dashboard.php"
@@ -685,6 +542,30 @@ function dashboardRoleBadge(string $role): string
 
 
                 <a
+                    href="divisions.php"
+                    class="btn btn-outline-warning menu-link"
+                >
+                    Divisi
+                </a>
+
+
+                <a
+                    href="smelters.php"
+                    class="btn btn-outline-warning menu-link"
+                >
+                    Smelter
+                </a>
+
+
+                <a
+                    href="teams.php"
+                    class="btn btn-outline-warning menu-link"
+                >
+                    Team
+                </a>
+
+
+                <a
                     href="access-requests.php"
                     class="btn btn-outline-warning menu-link"
                 >
@@ -700,60 +581,29 @@ function dashboardRoleBadge(string $role): string
 
                 </a>
 
-
-                <a
-                    href="teams.php"
-                    class="btn btn-outline-warning menu-link"
-                >
-                    Team Management
-                </a>
-
-
-                <a
-                    href="divisions.php"
-                    class="btn btn-outline-warning menu-link"
-                >
-                    Division
-                </a>
-
-
-                <a
-                    href="smelters.php"
-                    class="btn btn-outline-warning menu-link"
-                >
-                    Smelter
-                </a>
-
-
             </div>
 
-        </div>
+        </aside>
 
 
         <!-- =================================================
              CONTENT
         ================================================== -->
 
-        <div class="col-md-10 p-4">
+        <main class="col-md-10 p-4">
 
 
             <!-- HEADER -->
 
-            <div
-                class="d-flex justify-content-between align-items-center mb-4"
-            >
+            <div class="mb-4">
 
-                <div>
+                <h2 class="mb-1">
+                    Dashboard Admin
+                </h2>
 
-                    <h2 class="mb-1">
-                        Dashboard Admin
-                    </h2>
-
-                    <p class="text-muted mb-0">
-                        Ringkasan sistem dan pekerjaan yang perlu diproses.
-                    </p>
-
-                </div>
+                <p class="text-muted mb-0">
+                    Ringkasan sistem dan pekerjaan yang perlu diproses.
+                </p>
 
             </div>
 
@@ -763,8 +613,7 @@ function dashboardRoleBadge(string $role): string
             ================================================== -->
 
             <?php if (
-                $pendingUsers > 0
-                ||
+                $pendingUsers > 0 ||
                 $totalAdminRequests > 0
             ): ?>
 
@@ -783,7 +632,7 @@ function dashboardRoleBadge(string $role): string
                                 <strong>
                                     <?= $pendingUsers ?>
                                 </strong>
-                                registrasi user masih menunggu approval.
+                                registrasi user menunggu approval.
                             </div>
 
                         <?php endif; ?>
@@ -796,7 +645,8 @@ function dashboardRoleBadge(string $role): string
                                 <strong>
                                     <?= $pendingSmelterRequests ?>
                                 </strong>
-                                request Smelter tambahan SPV menunggu approval.
+                                request Smelter tambahan SPV
+                                menunggu approval Admin.
                             </div>
 
                         <?php endif; ?>
@@ -809,7 +659,8 @@ function dashboardRoleBadge(string $role): string
                                 <strong>
                                     <?= $pendingTeamRequests ?>
                                 </strong>
-                                request Team tambahan Foreman menunggu approval Admin.
+                                request Team tambahan Foreman
+                                menunggu approval Admin.
                             </div>
 
                         <?php endif; ?>
@@ -842,11 +693,10 @@ function dashboardRoleBadge(string $role): string
                 Statistik User
             </h5>
 
-
             <div class="row g-3 mb-4">
 
 
-                <!-- TOTAL -->
+                <!-- TOTAL USER -->
 
                 <div class="col-6 col-lg-3">
 
@@ -895,11 +745,9 @@ function dashboardRoleBadge(string $role): string
                                 </div>
 
                                 <small class="text-muted">
-                                    SPV:
-                                    <?= $pendingByRole['spv'] ?>
+                                    SPV: <?= $pendingSpv ?>
                                     |
-                                    Foreman:
-                                    <?= $pendingByRole['foreman'] ?>
+                                    Foreman: <?= $pendingForeman ?>
                                 </small>
 
                             </div>
@@ -933,11 +781,9 @@ function dashboardRoleBadge(string $role): string
                                 </div>
 
                                 <small class="text-muted">
-                                    SPV:
-                                    <?= $totalSpv ?>
+                                    SPV: <?= $totalSpv ?>
                                     |
-                                    Foreman:
-                                    <?= $totalForeman ?>
+                                    Foreman: <?= $totalForeman ?>
                                 </small>
 
                             </div>
@@ -986,82 +832,96 @@ function dashboardRoleBadge(string $role): string
 
 
             <!-- =================================================
-                 ORGANIZATION STATISTICS
+                 STRUKTUR ORGANISASI
             ================================================== -->
 
             <h5 class="mb-3">
                 Struktur Organisasi
             </h5>
 
-
             <div class="row g-3 mb-4">
 
 
-                <!-- DIVISION -->
-
                 <div class="col-6 col-lg-4">
 
-                    <div class="card shadow-sm h-100">
+                    <a
+                        href="divisions.php"
+                        class="text-decoration-none text-dark"
+                    >
 
-                        <div class="card-body">
+                        <div class="card shadow-sm stat-card h-100">
 
-                            <small class="text-muted">
-                                Divisi Aktif
-                            </small>
+                            <div class="card-body">
 
-                            <div class="stat-number">
-                                <?= $totalDivisions ?>
+                                <small class="text-muted">
+                                    Divisi Aktif
+                                </small>
+
+                                <div class="stat-number">
+                                    <?= $totalDivisions ?>
+                                </div>
+
                             </div>
 
                         </div>
 
-                    </div>
+                    </a>
 
                 </div>
 
 
-                <!-- SMELTER -->
-
                 <div class="col-6 col-lg-4">
 
-                    <div class="card shadow-sm h-100">
+                    <a
+                        href="smelters.php"
+                        class="text-decoration-none text-dark"
+                    >
 
-                        <div class="card-body">
+                        <div class="card shadow-sm stat-card h-100">
 
-                            <small class="text-muted">
-                                Smelter Aktif
-                            </small>
+                            <div class="card-body">
 
-                            <div class="stat-number">
-                                <?= $totalSmelters ?>
+                                <small class="text-muted">
+                                    Smelter Aktif
+                                </small>
+
+                                <div class="stat-number">
+                                    <?= $totalSmelters ?>
+                                </div>
+
                             </div>
 
                         </div>
 
-                    </div>
+                    </a>
 
                 </div>
 
 
-                <!-- TEAM -->
-
                 <div class="col-6 col-lg-4">
 
-                    <div class="card shadow-sm h-100">
+                    <a
+                        href="teams.php"
+                        class="text-decoration-none text-dark"
+                    >
 
-                        <div class="card-body">
+                        <div class="card shadow-sm stat-card h-100">
 
-                            <small class="text-muted">
-                                Team Aktif
-                            </small>
+                            <div class="card-body">
 
-                            <div class="stat-number">
-                                <?= $totalTeams ?>
+                                <small class="text-muted">
+                                    Team Aktif
+                                </small>
+
+                                <div class="stat-number">
+                                    <?= $totalTeams ?>
+                                </div>
+
                             </div>
 
                         </div>
 
-                    </div>
+                    </a>
 
                 </div>
 
@@ -1069,18 +929,17 @@ function dashboardRoleBadge(string $role): string
 
 
             <!-- =================================================
-                 ACCESS REQUEST STATISTICS
+                 REQUEST AKSES
             ================================================== -->
 
             <h5 class="mb-3">
                 Request Akses
             </h5>
 
-
             <div class="row g-3 mb-4">
 
 
-                <!-- ALL REQUEST -->
+                <!-- SEMUA REQUEST -->
 
                 <div class="col-6 col-lg-4">
 
@@ -1185,17 +1044,14 @@ function dashboardRoleBadge(string $role): string
 
 
             <!-- =================================================
-                 LATEST REQUESTS
+                 REQUEST TERBARU
             ================================================== -->
 
             <div class="card shadow-sm mb-4">
 
-
                 <div class="card-header">
 
-                    <div
-                        class="d-flex justify-content-between align-items-center"
-                    >
+                    <div class="d-flex justify-content-between align-items-center">
 
                         <strong>
                             Request Terbaru yang Perlu Diproses
@@ -1215,7 +1071,6 @@ function dashboardRoleBadge(string $role): string
 
                 <div class="card-body">
 
-
                     <?php if (!$latestRequests): ?>
 
                         <div class="text-center text-muted py-4">
@@ -1226,145 +1081,80 @@ function dashboardRoleBadge(string $role): string
 
                     <?php else: ?>
 
-
                         <div class="table-responsive">
 
-                            <table
-                                class="table table-bordered table-hover"
-                            >
+                            <table class="table table-hover">
 
                                 <thead class="table-dark">
 
                                     <tr>
 
-                                        <th>
-                                            User
-                                        </th>
-
-                                        <th>
-                                            Role
-                                        </th>
-
-                                        <th>
-                                            Divisi
-                                        </th>
-
-                                        <th>
-                                            Request
-                                        </th>
-
-                                        <th>
-                                            Tujuan
-                                        </th>
-
-                                        <th>
-                                            Alasan
-                                        </th>
-
-                                        <th>
-                                            Tanggal
-                                        </th>
-
-                                        <th>
-                                            Aksi
-                                        </th>
+                                        <th>User</th>
+                                        <th>Role</th>
+                                        <th>Divisi</th>
+                                        <th>Request</th>
+                                        <th>Tujuan</th>
+                                        <th>Alasan</th>
+                                        <th>Tanggal</th>
+                                        <th>Aksi</th>
 
                                     </tr>
 
                                 </thead>
 
-
                                 <tbody>
 
-
-                                <?php foreach (
-                                    $latestRequests
-                                    as $request
-                                ): ?>
+                                <?php foreach ($latestRequests as $request): ?>
 
                                     <tr>
-
-
-                                        <!-- USER -->
 
                                         <td>
 
                                             <strong>
-                                                <?= e(
-                                                    $request['name']
-                                                ) ?>
+                                                <?= e($request['user_name']) ?>
                                             </strong>
 
                                             <br>
 
                                             <small class="text-muted">
-                                                <?= e(
-                                                    $request['nik']
-                                                ) ?>
+                                                <?= e($request['nik']) ?>
                                             </small>
 
                                         </td>
 
 
-                                        <!-- ROLE -->
-
                                         <td>
-
                                             <?= dashboardRoleBadge(
                                                 $request['role_name']
                                             ) ?>
-
                                         </td>
 
 
-                                        <!-- DIVISION -->
-
                                         <td>
-
-                                            <?= e(
-                                                $request['division_name']
-                                            ) ?>
-
+                                            <?= e($request['division_name']) ?>
                                         </td>
 
 
-                                        <!-- REQUEST TYPE -->
-
                                         <td>
-
                                             <?= requestTypeLabel(
                                                 $request['request_type']
                                             ) ?>
-
                                         </td>
 
-
-                                        <!-- TUJUAN -->
 
                                         <td>
 
                                             <strong>
-                                                <?= e(
-                                                    $request['smelter_name']
-                                                ) ?>
+                                                <?= e($request['smelter_name']) ?>
                                             </strong>
 
-
-                                            <?php if (
-                                                !empty(
-                                                    $request['team_name']
-                                                )
-                                            ): ?>
+                                            <?php if (!empty($request['team_name'])): ?>
 
                                                 <br>
 
                                                 <small class="text-muted">
-
                                                     Team:
-                                                    <?= e(
-                                                        $request['team_name']
-                                                    ) ?>
-
+                                                    <?= e($request['team_name']) ?>
                                                 </small>
 
                                             <?php endif; ?>
@@ -1372,30 +1162,20 @@ function dashboardRoleBadge(string $role): string
                                         </td>
 
 
-                                        <!-- ALASAN -->
-
                                         <td>
 
                                             <?php if (
-                                                !empty(
-                                                    $request[
-                                                        'requested_reason'
-                                                    ]
-                                                )
+                                                !empty($request['requested_reason'])
                                             ): ?>
 
                                                 <span
                                                     title="<?= e(
-                                                        $request[
-                                                            'requested_reason'
-                                                        ]
+                                                        $request['requested_reason']
                                                     ) ?>"
                                                 >
                                                     <?= e(
                                                         mb_strimwidth(
-                                                            $request[
-                                                                'requested_reason'
-                                                            ],
+                                                            $request['requested_reason'],
                                                             0,
                                                             40,
                                                             '...'
@@ -1414,29 +1194,21 @@ function dashboardRoleBadge(string $role): string
                                         </td>
 
 
-                                        <!-- DATE -->
-
                                         <td>
 
                                             <small>
-
                                                 <?= e(
                                                     date(
                                                         'd-m-Y H:i',
                                                         strtotime(
-                                                            $request[
-                                                                'created_at'
-                                                            ]
+                                                            $request['created_at']
                                                         )
                                                     )
                                                 ) ?>
-
                                             </small>
 
                                         </td>
 
-
-                                        <!-- ACTION -->
 
                                         <td>
 
@@ -1449,11 +1221,9 @@ function dashboardRoleBadge(string $role): string
 
                                         </td>
 
-
                                     </tr>
 
                                 <?php endforeach; ?>
-
 
                                 </tbody>
 
@@ -1469,21 +1239,18 @@ function dashboardRoleBadge(string $role): string
 
 
             <!-- =================================================
-                 USER STATUS INFORMATION
+                 INFORMASI SISTEM
             ================================================== -->
 
             <div class="card shadow-sm">
 
-
                 <div class="card-body">
 
-
-                    <h5>
+                    <h5 class="mb-3">
                         Informasi Sistem
                     </h5>
 
-
-                    <div class="row g-3 mt-1">
+                    <div class="row g-3">
 
 
                         <div class="col-md-4">
@@ -1555,7 +1322,7 @@ function dashboardRoleBadge(string $role): string
             </div>
 
 
-        </div>
+        </main>
 
     </div>
 

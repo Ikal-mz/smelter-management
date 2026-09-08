@@ -27,7 +27,7 @@ function redirectWithMessage(string $type, string $message): void
     $_SESSION['flash_type'] = $type;
     $_SESSION['flash_message'] = $message;
 
-    header('Location: divisions.php');
+    header('Location: smelters.php');
     exit;
 }
 
@@ -54,84 +54,128 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     /*
     |--------------------------------------------------------------------------
-    | ADD DIVISION
+    | ADD SMELTER
     |--------------------------------------------------------------------------
     */
 
     if ($action === 'add') {
 
+        $divisionId = (int) ($_POST['division_id'] ?? 0);
         $name = trim($_POST['name'] ?? '');
 
+        if ($divisionId <= 0) {
+            redirectWithMessage('danger', 'Divisi wajib dipilih.');
+        }
+
         if ($name === '') {
-            redirectWithMessage('danger', 'Nama divisi wajib diisi.');
+            redirectWithMessage('danger', 'Nama Smelter wajib diisi.');
         }
 
         if (mb_strlen($name) > 100) {
-            redirectWithMessage('danger', 'Nama divisi maksimal 100 karakter.');
+            redirectWithMessage('danger', 'Nama Smelter maksimal 100 karakter.');
         }
 
-        // Cek duplikasi tanpa membedakan huruf besar/kecil
+        // Pastikan divisi ada dan aktif
         $stmt = $pdo->prepare("
-            SELECT id
+            SELECT id, name
             FROM divisions
-            WHERE LOWER(name) = LOWER(?)
+            WHERE id = ?
+              AND status = 'active'
             LIMIT 1
         ");
 
-        $stmt->execute([$name]);
+        $stmt->execute([$divisionId]);
+
+        $division = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$division) {
+            redirectWithMessage(
+                'danger',
+                'Divisi tidak ditemukan atau sedang nonaktif.'
+            );
+        }
+
+        // Cek nama smelter pada divisi yang sama
+        $stmt = $pdo->prepare("
+            SELECT id
+            FROM smelters
+            WHERE division_id = ?
+              AND LOWER(name) = LOWER(?)
+            LIMIT 1
+        ");
+
+        $stmt->execute([$divisionId, $name]);
 
         if ($stmt->fetch()) {
-            redirectWithMessage('warning', 'Divisi dengan nama tersebut sudah ada.');
+            redirectWithMessage(
+                'warning',
+                'Smelter dengan nama tersebut sudah ada pada divisi ini.'
+            );
         }
 
         try {
 
             $stmt = $pdo->prepare("
-                INSERT INTO divisions
-                    (name, status, created_at, updated_at)
+                INSERT INTO smelters
+                    (division_id, name, status, created_at, updated_at)
                 VALUES
-                    (?, 'active', NOW(), NOW())
+                    (?, ?, 'active', NOW(), NOW())
             ");
 
-            $stmt->execute([$name]);
+            $stmt->execute([
+                $divisionId,
+                $name
+            ]);
 
-            redirectWithMessage('success', 'Divisi berhasil ditambahkan.');
+            redirectWithMessage(
+                'success',
+                'Smelter berhasil ditambahkan.'
+            );
 
         } catch (PDOException $e) {
 
             redirectWithMessage(
                 'danger',
-                'Gagal menambahkan divisi. ' . $e->getMessage()
+                'Gagal menambahkan Smelter. ' . $e->getMessage()
             );
         }
     }
 
     /*
     |--------------------------------------------------------------------------
-    | EDIT DIVISION
+    | EDIT SMELTER
     |--------------------------------------------------------------------------
     */
 
     if ($action === 'edit') {
 
         $id = (int) ($_POST['id'] ?? 0);
+        $divisionId = (int) ($_POST['division_id'] ?? 0);
         $name = trim($_POST['name'] ?? '');
 
         if ($id <= 0) {
-            redirectWithMessage('danger', 'ID divisi tidak valid.');
+            redirectWithMessage('danger', 'ID Smelter tidak valid.');
+        }
+
+        if ($divisionId <= 0) {
+            redirectWithMessage('danger', 'Divisi wajib dipilih.');
         }
 
         if ($name === '') {
-            redirectWithMessage('danger', 'Nama divisi wajib diisi.');
+            redirectWithMessage('danger', 'Nama Smelter wajib diisi.');
         }
 
         if (mb_strlen($name) > 100) {
-            redirectWithMessage('danger', 'Nama divisi maksimal 100 karakter.');
+            redirectWithMessage(
+                'danger',
+                'Nama Smelter maksimal 100 karakter.'
+            );
         }
 
+        // Pastikan Smelter ada
         $stmt = $pdo->prepare("
             SELECT id
-            FROM divisions
+            FROM smelters
             WHERE id = ?
             LIMIT 1
         ");
@@ -139,52 +183,86 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->execute([$id]);
 
         if (!$stmt->fetch()) {
-            redirectWithMessage('danger', 'Divisi tidak ditemukan.');
+            redirectWithMessage(
+                'danger',
+                'Smelter tidak ditemukan.'
+            );
         }
 
-        // Cek apakah nama sudah digunakan divisi lain
+        // Pastikan divisi tujuan aktif
         $stmt = $pdo->prepare("
             SELECT id
             FROM divisions
-            WHERE LOWER(name) = LOWER(?)
+            WHERE id = ?
+              AND status = 'active'
+            LIMIT 1
+        ");
+
+        $stmt->execute([$divisionId]);
+
+        if (!$stmt->fetch()) {
+            redirectWithMessage(
+                'danger',
+                'Divisi tujuan tidak ditemukan atau sedang nonaktif.'
+            );
+        }
+
+        // Cek duplikasi nama dalam divisi tujuan
+        $stmt = $pdo->prepare("
+            SELECT id
+            FROM smelters
+            WHERE division_id = ?
+              AND LOWER(name) = LOWER(?)
               AND id <> ?
             LIMIT 1
         ");
 
-        $stmt->execute([$name, $id]);
+        $stmt->execute([
+            $divisionId,
+            $name,
+            $id
+        ]);
 
         if ($stmt->fetch()) {
             redirectWithMessage(
                 'warning',
-                'Nama divisi tersebut sudah digunakan oleh divisi lain.'
+                'Nama Smelter tersebut sudah digunakan pada divisi tujuan.'
             );
         }
 
         try {
 
             $stmt = $pdo->prepare("
-                UPDATE divisions
-                SET name = ?,
+                UPDATE smelters
+                SET division_id = ?,
+                    name = ?,
                     updated_at = NOW()
                 WHERE id = ?
             ");
 
-            $stmt->execute([$name, $id]);
+            $stmt->execute([
+                $divisionId,
+                $name,
+                $id
+            ]);
 
-            redirectWithMessage('success', 'Divisi berhasil diperbarui.');
+            redirectWithMessage(
+                'success',
+                'Smelter berhasil diperbarui.'
+            );
 
         } catch (PDOException $e) {
 
             redirectWithMessage(
                 'danger',
-                'Gagal memperbarui divisi. ' . $e->getMessage()
+                'Gagal memperbarui Smelter. ' . $e->getMessage()
             );
         }
     }
 
     /*
     |--------------------------------------------------------------------------
-    | ACTIVATE / DEACTIVATE
+    | TOGGLE STATUS
     |--------------------------------------------------------------------------
     */
 
@@ -193,25 +271,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $id = (int) ($_POST['id'] ?? 0);
 
         if ($id <= 0) {
-            redirectWithMessage('danger', 'ID divisi tidak valid.');
+            redirectWithMessage(
+                'danger',
+                'ID Smelter tidak valid.'
+            );
         }
 
         $stmt = $pdo->prepare("
             SELECT *
-            FROM divisions
+            FROM smelters
             WHERE id = ?
             LIMIT 1
         ");
 
         $stmt->execute([$id]);
 
-        $division = $stmt->fetch(PDO::FETCH_ASSOC);
+        $smelter = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if (!$division) {
-            redirectWithMessage('danger', 'Divisi tidak ditemukan.');
+        if (!$smelter) {
+            redirectWithMessage(
+                'danger',
+                'Smelter tidak ditemukan.'
+            );
         }
 
-        $currentStatus = $division['status'] ?? 'inactive';
+        $currentStatus = $smelter['status'] ?? 'inactive';
 
         /*
         |--------------------------------------------------------------------------
@@ -221,47 +305,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($currentStatus === 'active') {
 
-            // Jangan nonaktifkan jika masih ada smelter aktif
+            // Jangan nonaktifkan jika masih ada Team aktif
             $stmt = $pdo->prepare("
                 SELECT COUNT(*)
-                FROM smelters
-                WHERE division_id = ?
+                FROM teams
+                WHERE smelter_id = ?
                   AND status = 'active'
             ");
 
             $stmt->execute([$id]);
 
-            $activeSmelters = (int) $stmt->fetchColumn();
+            $activeTeams = (int) $stmt->fetchColumn();
 
-            if ($activeSmelters > 0) {
+            if ($activeTeams > 0) {
 
                 redirectWithMessage(
                     'warning',
-                    'Divisi tidak dapat dinonaktifkan karena masih memiliki '
-                    . $activeSmelters
-                    . ' smelter aktif. Nonaktifkan smelter terlebih dahulu.'
+                    'Smelter tidak dapat dinonaktifkan karena masih memiliki '
+                    . $activeTeams
+                    . ' Team aktif. Nonaktifkan Team terlebih dahulu.'
                 );
             }
 
-            // Jangan nonaktifkan jika masih ada user aktif
+            // Jangan nonaktifkan jika masih ada akses aktif
             $stmt = $pdo->prepare("
                 SELECT COUNT(*)
-                FROM users
-                WHERE division_id = ?
+                FROM user_access
+                WHERE smelter_id = ?
                   AND status = 'active'
             ");
 
             $stmt->execute([$id]);
 
-            $activeUsers = (int) $stmt->fetchColumn();
+            $activeAccess = (int) $stmt->fetchColumn();
 
-            if ($activeUsers > 0) {
+            if ($activeAccess > 0) {
 
                 redirectWithMessage(
                     'warning',
-                    'Divisi tidak dapat dinonaktifkan karena masih memiliki '
-                    . $activeUsers
-                    . ' user aktif.'
+                    'Smelter tidak dapat dinonaktifkan karena masih memiliki '
+                    . $activeAccess
+                    . ' akses user aktif.'
+                );
+            }
+
+            // Jangan nonaktifkan jika masih ada request pending
+            $stmt = $pdo->prepare("
+                SELECT COUNT(*)
+                FROM access_requests
+                WHERE smelter_id = ?
+                  AND status = 'pending'
+            ");
+
+            $stmt->execute([$id]);
+
+            $pendingRequests = (int) $stmt->fetchColumn();
+
+            if ($pendingRequests > 0) {
+
+                redirectWithMessage(
+                    'warning',
+                    'Smelter tidak dapat dinonaktifkan karena masih memiliki '
+                    . $pendingRequests
+                    . ' request akses pending.'
                 );
             }
 
@@ -275,36 +381,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             |--------------------------------------------------------------------------
             */
 
+            // Pastikan divisinya masih aktif
+            $stmt = $pdo->prepare("
+                SELECT d.id
+                FROM divisions d
+                INNER JOIN smelters s
+                    ON s.division_id = d.id
+                WHERE s.id = ?
+                  AND d.status = 'active'
+                LIMIT 1
+            ");
+
+            $stmt->execute([$id]);
+
+            if (!$stmt->fetch()) {
+                redirectWithMessage(
+                    'warning',
+                    'Smelter tidak dapat diaktifkan karena divisinya sedang nonaktif.'
+                );
+            }
+
             $newStatus = 'active';
         }
 
         try {
 
             $stmt = $pdo->prepare("
-                UPDATE divisions
+                UPDATE smelters
                 SET status = ?,
                     updated_at = NOW()
                 WHERE id = ?
             ");
 
-            $stmt->execute([$newStatus, $id]);
+            $stmt->execute([
+                $newStatus,
+                $id
+            ]);
 
             if ($newStatus === 'active') {
-                redirectWithMessage('success', 'Divisi berhasil diaktifkan.');
+
+                redirectWithMessage(
+                    'success',
+                    'Smelter berhasil diaktifkan.'
+                );
             }
 
-            redirectWithMessage('success', 'Divisi berhasil dinonaktifkan.');
+            redirectWithMessage(
+                'success',
+                'Smelter berhasil dinonaktifkan.'
+            );
 
         } catch (PDOException $e) {
 
             redirectWithMessage(
                 'danger',
-                'Gagal mengubah status divisi. ' . $e->getMessage()
+                'Gagal mengubah status Smelter. ' . $e->getMessage()
             );
         }
     }
 
-    redirectWithMessage('danger', 'Aksi tidak dikenali.');
+    redirectWithMessage(
+        'danger',
+        'Aksi tidak dikenali.'
+    );
 }
 
 /*
@@ -315,77 +454,92 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $stmt = $pdo->query("
     SELECT
-        d.id,
-        d.name,
-        d.status,
-        d.created_at,
-        d.updated_at,
+        id,
+        name,
+        status
+    FROM divisions
+    WHERE status = 'active'
+    ORDER BY name ASC
+");
 
-        (
-            SELECT COUNT(*)
-            FROM smelters s
-            WHERE s.division_id = d.id
-        ) AS total_smelters,
+$divisions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        (
-            SELECT COUNT(*)
-            FROM smelters s
-            WHERE s.division_id = d.id
-              AND s.status = 'active'
-        ) AS active_smelters,
+/*
+|--------------------------------------------------------------------------
+| GET SMELTERS
+|--------------------------------------------------------------------------
+*/
+
+$stmt = $pdo->query("
+    SELECT
+        s.id,
+        s.division_id,
+        s.name,
+        s.status,
+        s.created_at,
+        s.updated_at,
+
+        d.name AS division_name,
 
         (
             SELECT COUNT(*)
             FROM teams t
-            INNER JOIN smelters s
-                ON s.id = t.smelter_id
-            WHERE s.division_id = d.id
+            WHERE t.smelter_id = s.id
         ) AS total_teams,
 
         (
             SELECT COUNT(*)
             FROM teams t
-            INNER JOIN smelters s
-                ON s.id = t.smelter_id
-            WHERE s.division_id = d.id
+            WHERE t.smelter_id = s.id
               AND t.status = 'active'
         ) AS active_teams,
 
         (
             SELECT COUNT(*)
-            FROM users u
-            WHERE u.division_id = d.id
-              AND u.status <> 'deleted'
-        ) AS total_users
+            FROM user_access ua
+            WHERE ua.smelter_id = s.id
+              AND ua.status = 'active'
+        ) AS active_access
 
-    FROM divisions d
-    ORDER BY d.id ASC
+    FROM smelters s
+
+    INNER JOIN divisions d
+        ON d.id = s.division_id
+
+    ORDER BY
+        d.id ASC,
+        s.id ASC
 ");
 
-$divisions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$smelters = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-$totalDivisions = count($divisions);
+/*
+|--------------------------------------------------------------------------
+| STATISTICS
+|--------------------------------------------------------------------------
+*/
 
-$activeDivisions = 0;
-$inactiveDivisions = 0;
-$totalSmelters = 0;
+$totalSmelters = count($smelters);
+
+$activeSmelters = 0;
+$inactiveSmelters = 0;
 $totalTeams = 0;
 
-foreach ($divisions as $division) {
+foreach ($smelters as $smelter) {
 
-    if ($division['status'] === 'active') {
-        $activeDivisions++;
+    if ($smelter['status'] === 'active') {
+        $activeSmelters++;
     } else {
-        $inactiveDivisions++;
+        $inactiveSmelters++;
     }
 
-    $totalSmelters += (int) $division['total_smelters'];
-    $totalTeams += (int) $division['total_teams'];
+    $totalTeams += (int) $smelter['total_teams'];
 }
 
 ?>
 <!DOCTYPE html>
 <html lang="id">
+
 <head>
 
     <meta charset="UTF-8">
@@ -395,7 +549,7 @@ foreach ($divisions as $division) {
         content="width=device-width, initial-scale=1"
     >
 
-    <title>Kelola Divisi - Admin</title>
+    <title>Kelola Smelter - Admin</title>
 
     <link
         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
@@ -403,6 +557,7 @@ foreach ($divisions as $division) {
     >
 
     <style>
+
         body {
             background: #f5f6f8;
         }
@@ -436,13 +591,6 @@ foreach ($divisions as $division) {
             overflow: hidden;
         }
 
-        .badge-active {
-            background: #198754;
-        }
-
-        .badge-inactive {
-            background: #6c757d;
-        }
     </style>
 
 </head>
@@ -457,10 +605,15 @@ foreach ($divisions as $division) {
         <aside class="col-md-3 col-lg-2 px-0 sidebar">
 
             <div class="p-3 text-white">
-                <h5 class="mb-0">Admin Panel</h5>
+
+                <h5 class="mb-0">
+                    Admin Panel
+                </h5>
+
                 <small class="text-white-50">
                     Smelter Management
                 </small>
+
             </div>
 
             <nav>
@@ -473,11 +626,14 @@ foreach ($divisions as $division) {
                     Kelola User
                 </a>
 
-                <a href="divisions.php" class="active">
+                <a href="divisions.php">
                     Kelola Divisi
                 </a>
 
-                <a href="smelters.php">
+                <a
+                    href="smelters.php"
+                    class="active"
+                >
                     Kelola Smelter
                 </a>
 
@@ -493,31 +649,35 @@ foreach ($divisions as $division) {
 
         </aside>
 
-        <!-- CONTENT -->
+
+        <!-- MAIN CONTENT -->
         <main class="col-md-9 col-lg-10 px-md-4 py-4">
 
             <!-- HEADER -->
             <div class="d-flex justify-content-between align-items-center mb-4">
 
                 <div>
+
                     <h2 class="mb-1">
-                        Kelola Divisi
+                        Kelola Smelter
                     </h2>
 
                     <p class="text-muted mb-0">
-                        Mengelola divisi yang tersedia pada sistem smelter.
+                        Mengelola Smelter berdasarkan Divisi.
                     </p>
+
                 </div>
 
                 <button
                     class="btn btn-primary"
                     data-bs-toggle="modal"
-                    data-bs-target="#addDivisionModal"
+                    data-bs-target="#addSmelterModal"
                 >
-                    + Tambah Divisi
+                    + Tambah Smelter
                 </button>
 
             </div>
+
 
             <!-- FLASH MESSAGE -->
             <?php if ($flashMessage): ?>
@@ -539,48 +699,9 @@ foreach ($divisions as $division) {
 
             <?php endif; ?>
 
+
             <!-- STATISTICS -->
             <div class="row g-3 mb-4">
-
-                <div class="col-md-3">
-
-                    <div class="card stat-card shadow-sm">
-
-                        <div class="card-body">
-
-                            <div class="text-muted small">
-                                Total Divisi
-                            </div>
-
-                            <div class="fs-3 fw-bold">
-                                <?= $totalDivisions ?>
-                            </div>
-
-                        </div>
-
-                    </div>
-
-                </div>
-
-                <div class="col-md-3">
-
-                    <div class="card stat-card shadow-sm">
-
-                        <div class="card-body">
-
-                            <div class="text-muted small">
-                                Divisi Aktif
-                            </div>
-
-                            <div class="fs-3 fw-bold text-success">
-                                <?= $activeDivisions ?>
-                            </div>
-
-                        </div>
-
-                    </div>
-
-                </div>
 
                 <div class="col-md-3">
 
@@ -601,6 +722,49 @@ foreach ($divisions as $division) {
                     </div>
 
                 </div>
+
+
+                <div class="col-md-3">
+
+                    <div class="card stat-card shadow-sm">
+
+                        <div class="card-body">
+
+                            <div class="text-muted small">
+                                Smelter Aktif
+                            </div>
+
+                            <div class="fs-3 fw-bold text-success">
+                                <?= $activeSmelters ?>
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <div class="col-md-3">
+
+                    <div class="card stat-card shadow-sm">
+
+                        <div class="card-body">
+
+                            <div class="text-muted small">
+                                Smelter Nonaktif
+                            </div>
+
+                            <div class="fs-3 fw-bold text-secondary">
+                                <?= $inactiveSmelters ?>
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
 
                 <div class="col-md-3">
 
@@ -624,16 +788,18 @@ foreach ($divisions as $division) {
 
             </div>
 
+
             <!-- TABLE -->
             <div class="card table-card shadow-sm">
 
                 <div class="card-header bg-white py-3">
 
                     <strong>
-                        Daftar Divisi
+                        Daftar Smelter
                     </strong>
 
                 </div>
+
 
                 <div class="card-body p-0">
 
@@ -650,10 +816,10 @@ foreach ($divisions as $division) {
                                     </th>
 
                                     <th>
-                                        Nama Divisi
+                                        Divisi
                                     </th>
 
-                                    <th class="text-center">
+                                    <th>
                                         Smelter
                                     </th>
 
@@ -662,7 +828,7 @@ foreach ($divisions as $division) {
                                     </th>
 
                                     <th class="text-center">
-                                        User
+                                        Akses
                                     </th>
 
                                     <th class="text-center">
@@ -677,9 +843,10 @@ foreach ($divisions as $division) {
 
                             </thead>
 
+
                             <tbody>
 
-                            <?php if (!$divisions): ?>
+                            <?php if (!$smelters): ?>
 
                                 <tr>
 
@@ -687,7 +854,7 @@ foreach ($divisions as $division) {
                                         colspan="7"
                                         class="text-center text-muted py-5"
                                     >
-                                        Belum ada divisi.
+                                        Belum ada Smelter.
 
                                     </td>
 
@@ -695,7 +862,7 @@ foreach ($divisions as $division) {
 
                             <?php else: ?>
 
-                                <?php foreach ($divisions as $index => $division): ?>
+                                <?php foreach ($smelters as $index => $smelter): ?>
 
                                     <tr>
 
@@ -703,65 +870,69 @@ foreach ($divisions as $division) {
                                             <?= $index + 1 ?>
                                         </td>
 
+
+                                        <td>
+
+                                            <span class="fw-semibold">
+                                                <?= e($smelter['division_name']) ?>
+                                            </span>
+
+                                        </td>
+
+
                                         <td>
 
                                             <div class="fw-semibold">
-                                                <?= e($division['name']) ?>
+                                                <?= e($smelter['name']) ?>
                                             </div>
 
                                             <small class="text-muted">
-                                                ID: <?= (int) $division['id'] ?>
+                                                ID:
+                                                <?= (int) $smelter['id'] ?>
                                             </small>
 
                                         </td>
+
 
                                         <td class="text-center">
 
                                             <span class="fw-semibold">
-                                                <?= (int) $division['active_smelters'] ?>
+                                                <?= (int) $smelter['active_teams'] ?>
                                             </span>
 
                                             <small class="text-muted">
                                                 /
-                                                <?= (int) $division['total_smelters'] ?>
+                                                <?= (int) $smelter['total_teams'] ?>
                                             </small>
 
                                         </td>
 
+
                                         <td class="text-center">
 
-                                            <span class="fw-semibold">
-                                                <?= (int) $division['active_teams'] ?>
-                                            </span>
-
-                                            <small class="text-muted">
-                                                /
-                                                <?= (int) $division['total_teams'] ?>
-                                            </small>
+                                            <?= (int) $smelter['active_access'] ?>
 
                                         </td>
 
-                                        <td class="text-center">
-                                            <?= (int) $division['total_users'] ?>
-                                        </td>
 
                                         <td class="text-center">
 
-                                            <?php if ($division['status'] === 'active'): ?>
+                                            <?php if ($smelter['status'] === 'active'): ?>
 
-                                                <span class="badge badge-active">
+                                                <span class="badge bg-success">
                                                     Aktif
                                                 </span>
 
                                             <?php else: ?>
 
-                                                <span class="badge badge-inactive">
+                                                <span class="badge bg-secondary">
                                                     Nonaktif
                                                 </span>
 
                                             <?php endif; ?>
 
                                         </td>
+
 
                                         <td class="text-center">
 
@@ -772,17 +943,19 @@ foreach ($divisions as $division) {
                                                     type="button"
                                                     class="btn btn-sm btn-outline-primary"
                                                     data-bs-toggle="modal"
-                                                    data-bs-target="#editDivisionModal"
-                                                    data-id="<?= (int) $division['id'] ?>"
-                                                    data-name="<?= e($division['name']) ?>"
+                                                    data-bs-target="#editSmelterModal"
+                                                    data-id="<?= (int) $smelter['id'] ?>"
+                                                    data-division="<?= (int) $smelter['division_id'] ?>"
+                                                    data-name="<?= e($smelter['name']) ?>"
                                                 >
                                                     Edit
                                                 </button>
 
-                                                <!-- TOGGLE -->
+
+                                                <!-- STATUS -->
                                                 <form
                                                     method="POST"
-                                                    onsubmit="return confirm('Yakin ingin mengubah status divisi ini?');"
+                                                    onsubmit="return confirm('Yakin ingin mengubah status Smelter ini?');"
                                                 >
 
                                                     <input
@@ -800,10 +973,11 @@ foreach ($divisions as $division) {
                                                     <input
                                                         type="hidden"
                                                         name="id"
-                                                        value="<?= (int) $division['id'] ?>"
+                                                        value="<?= (int) $smelter['id'] ?>"
                                                     >
 
-                                                    <?php if ($division['status'] === 'active'): ?>
+
+                                                    <?php if ($smelter['status'] === 'active'): ?>
 
                                                         <button
                                                             type="submit"
@@ -853,12 +1027,12 @@ foreach ($divisions as $division) {
 
 
 <!-- ========================================================= -->
-<!-- ADD DIVISION MODAL -->
+<!-- ADD SMELTER MODAL -->
 <!-- ========================================================= -->
 
 <div
     class="modal fade"
-    id="addDivisionModal"
+    id="addSmelterModal"
     tabindex="-1"
     aria-hidden="true"
 >
@@ -872,7 +1046,7 @@ foreach ($divisions as $division) {
                 <div class="modal-header">
 
                     <h5 class="modal-title">
-                        Tambah Divisi
+                        Tambah Smelter
                     </h5>
 
                     <button
@@ -882,6 +1056,7 @@ foreach ($divisions as $division) {
                     ></button>
 
                 </div>
+
 
                 <div class="modal-body">
 
@@ -897,10 +1072,42 @@ foreach ($divisions as $division) {
                         value="add"
                     >
 
+
                     <div class="mb-3">
 
                         <label class="form-label">
-                            Nama Divisi
+                            Divisi
+                        </label>
+
+                        <select
+                            name="division_id"
+                            class="form-select"
+                            required
+                        >
+
+                            <option value="">
+                                -- Pilih Divisi --
+                            </option>
+
+                            <?php foreach ($divisions as $division): ?>
+
+                                <option
+                                    value="<?= (int) $division['id'] ?>"
+                                >
+                                    <?= e($division['name']) ?>
+                                </option>
+
+                            <?php endforeach; ?>
+
+                        </select>
+
+                    </div>
+
+
+                    <div class="mb-3">
+
+                        <label class="form-label">
+                            Nama Smelter
                         </label>
 
                         <input
@@ -908,13 +1115,14 @@ foreach ($divisions as $division) {
                             name="name"
                             class="form-control"
                             maxlength="100"
-                            placeholder="Contoh: Electric Furnace"
+                            placeholder="Contoh: Smelter 3"
                             required
                         >
 
                     </div>
 
                 </div>
+
 
                 <div class="modal-footer">
 
@@ -945,12 +1153,12 @@ foreach ($divisions as $division) {
 
 
 <!-- ========================================================= -->
-<!-- EDIT DIVISION MODAL -->
+<!-- EDIT SMELTER MODAL -->
 <!-- ========================================================= -->
 
 <div
     class="modal fade"
-    id="editDivisionModal"
+    id="editSmelterModal"
     tabindex="-1"
     aria-hidden="true"
 >
@@ -964,7 +1172,7 @@ foreach ($divisions as $division) {
                 <div class="modal-header">
 
                     <h5 class="modal-title">
-                        Edit Divisi
+                        Edit Smelter
                     </h5>
 
                     <button
@@ -974,6 +1182,7 @@ foreach ($divisions as $division) {
                     ></button>
 
                 </div>
+
 
                 <div class="modal-body">
 
@@ -992,19 +1201,52 @@ foreach ($divisions as $division) {
                     <input
                         type="hidden"
                         name="id"
-                        id="editDivisionId"
+                        id="editSmelterId"
                     >
+
 
                     <div class="mb-3">
 
                         <label class="form-label">
-                            Nama Divisi
+                            Divisi
+                        </label>
+
+                        <select
+                            name="division_id"
+                            id="editSmelterDivision"
+                            class="form-select"
+                            required
+                        >
+
+                            <option value="">
+                                -- Pilih Divisi --
+                            </option>
+
+                            <?php foreach ($divisions as $division): ?>
+
+                                <option
+                                    value="<?= (int) $division['id'] ?>"
+                                >
+                                    <?= e($division['name']) ?>
+                                </option>
+
+                            <?php endforeach; ?>
+
+                        </select>
+
+                    </div>
+
+
+                    <div class="mb-3">
+
+                        <label class="form-label">
+                            Nama Smelter
                         </label>
 
                         <input
                             type="text"
                             name="name"
-                            id="editDivisionName"
+                            id="editSmelterName"
                             class="form-control"
                             maxlength="100"
                             required
@@ -1013,6 +1255,7 @@ foreach ($divisions as $division) {
                     </div>
 
                 </div>
+
 
                 <div class="modal-footer">
 
@@ -1046,23 +1289,43 @@ foreach ($divisions as $division) {
     src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
 ></script>
 
+
 <script>
 
-const editDivisionModal = document.getElementById('editDivisionModal');
+const editSmelterModal =
+    document.getElementById('editSmelterModal');
 
-if (editDivisionModal) {
+if (editSmelterModal) {
 
-    editDivisionModal.addEventListener('show.bs.modal', function (event) {
+    editSmelterModal.addEventListener(
+        'show.bs.modal',
+        function (event) {
 
-        const button = event.relatedTarget;
+            const button = event.relatedTarget;
 
-        const id = button.getAttribute('data-id');
-        const name = button.getAttribute('data-name');
+            const id =
+                button.getAttribute('data-id');
 
-        document.getElementById('editDivisionId').value = id;
-        document.getElementById('editDivisionName').value = name;
+            const division =
+                button.getAttribute('data-division');
 
-    });
+            const name =
+                button.getAttribute('data-name');
+
+            document.getElementById(
+                'editSmelterId'
+            ).value = id;
+
+            document.getElementById(
+                'editSmelterDivision'
+            ).value = division;
+
+            document.getElementById(
+                'editSmelterName'
+            ).value = name;
+
+        }
+    );
 
 }
 
