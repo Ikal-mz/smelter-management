@@ -1,0 +1,21 @@
+<?php
+
+require_once __DIR__ . '/auth.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: ../auth/login.php');
+    exit;
+}
+
+if (($_SESSION['role'] ?? '') !== 'spv') {
+    http_response_code(403);
+    exit('Akses ditolak.');
+}
+
+if (($_SESSION['status'] ?? '') !== 'active') {
+    session_unset();
+    session_destroy();
+
+    header('Location: ../auth/login.php');
+    exit;
+}
