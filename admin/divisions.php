@@ -27,7 +27,7 @@ function redirectWithMessage(string $type, string $message): void
     $_SESSION['flash_type'] = $type;
     $_SESSION['flash_message'] = $message;
 
-    header('Location: divisions.php');
+    header('Location: divisions');
     exit;
 }
 
@@ -465,27 +465,27 @@ foreach ($divisions as $division) {
 
             <nav>
 
-                <a href="dashboard.php">
+                <a href="dashboard">
                     Dashboard
                 </a>
 
-                <a href="users.php">
+                <a href="users">
                     Kelola User
                 </a>
 
-                <a href="divisions.php" class="active">
+                <a href="divisions" class="active">
                     Kelola Divisi
                 </a>
 
-                <a href="smelters.php">
+                <a href="smelters">
                     Kelola Smelter
                 </a>
 
-                <a href="teams.php">
+                <a href="teams">
                     Kelola Team
                 </a>
 
-                <a href="access-requests.php">
+                <a href="access-requests">
                     Access Request
                 </a>
 

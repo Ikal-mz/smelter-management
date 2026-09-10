@@ -32,7 +32,7 @@ if (!$user) {
     session_unset();
     session_destroy();
 
-    header('Location: ../auth/login.php');
+    header('Location: ../auth/login');
     exit;
 }
 
@@ -518,7 +518,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
         </span>
 
         <a
-            href="../auth/logout.php"
+            href="../auth/logout"
             class="logout"
         >
             Logout
@@ -707,7 +707,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <div class="actions">
 
         <a
-            href="access-requests.php"
+            href="access-requests"
             class="btn btn-warning"
         >
             + Request Team Tambahan

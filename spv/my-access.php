@@ -63,7 +63,7 @@ $access = $stmt->fetchAll(PDO::FETCH_ASSOC);
         </span>
 
         <a
-            href="dashboard.php"
+            href="dashboard"
             class="btn btn-outline-light btn-sm"
         >
             Dashboard

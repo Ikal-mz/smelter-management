@@ -199,7 +199,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
             header(
-                'Location: access-requests.php?success=requested'
+                'Location: access-requests?success=requested'
             );
 
             exit;
@@ -331,7 +331,7 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
         </span>
 
         <a
-            href="dashboard.php"
+            href="dashboard"
             class="btn btn-outline-light btn-sm"
         >
             Dashboard
@@ -709,7 +709,7 @@ document.getElementById('smelter_id').addEventListener(
 
 
         fetch(
-            '../api/get-teams.php?smelter_id='
+            '../api/get-teams?smelter_id='
             + encodeURIComponent(smelterId)
         )
 

@@ -408,7 +408,7 @@ function formatDate(?string $date): string
     <div class="container-fluid">
 
         <a
-            href="dashboard.php"
+            href="dashboard"
             class="navbar-brand"
         >
             Smelter Management
@@ -422,7 +422,7 @@ function formatDate(?string $date): string
             &nbsp; | &nbsp;
 
             <a
-                href="../auth/logout.php"
+                href="../auth/logout"
                 class="text-white"
             >
                 Logout
@@ -458,7 +458,7 @@ function formatDate(?string $date): string
 
 
         <a
-            href="users.php"
+            href="users"
             class="btn btn-secondary"
         >
             ← Kembali
@@ -486,7 +486,7 @@ function formatDate(?string $date): string
                         <?php if (strtolower($user['role_name']) !== 'admin'): ?>
 
                             <a
-                                href="user-access.php?id=<?= (int) $user['id'] ?>"
+                                href="user-access?id=<?= (int) $user['id'] ?>"
                                 class="btn btn-primary"
                             >
                                 Kelola Access

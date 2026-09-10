@@ -273,7 +273,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $pdo->commit();
 
-            header('Location: foremen.php?success=approved');
+            header('Location: foremen?success=approved');
             exit;
         }
 
@@ -351,7 +351,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $pdo->commit();
 
-            header('Location: foremen.php?success=rejected');
+            header('Location: foremen?success=rejected');
             exit;
         }
 
@@ -464,7 +464,7 @@ $foremen = $stmt->fetchAll(PDO::FETCH_ASSOC);
         </span>
 
         <a
-            href="dashboard.php"
+            href="dashboard"
             class="btn btn-outline-light btn-sm"
         >
             Dashboard

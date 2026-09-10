@@ -268,7 +268,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->commit();
 
             header(
-                'Location: access-requests.php?success=team_approved'
+                'Location: access-requests?success=team_approved'
             );
             exit;
 
@@ -371,7 +371,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             header(
-                'Location: access-requests.php?success=team_rejected'
+                'Location: access-requests?success=team_rejected'
             );
             exit;
 
@@ -507,7 +507,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
 
 
-            header('Location: access-requests.php?success=requested');
+            header('Location: access-requests?success=requested');
             exit;
 
 
@@ -686,7 +686,7 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
         <div>
 
             <a
-                href="dashboard.php"
+                href="dashboard"
                 class="btn btn-outline-light btn-sm"
             >
                 Dashboard

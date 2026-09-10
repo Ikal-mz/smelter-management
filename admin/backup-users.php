@@ -647,7 +647,7 @@ $pendingUsers = $stmt->fetchAll();
     <div class="container-fluid">
 
         <a
-            href="dashboard.php"
+            href="dashboard"
             class="navbar-brand"
         >
             Smelter Management
@@ -660,7 +660,7 @@ $pendingUsers = $stmt->fetchAll();
             &nbsp; | &nbsp;
 
             <a
-                href="../auth/logout.php"
+                href="../auth/logout"
                 class="text-white"
             >
                 Logout
@@ -683,7 +683,7 @@ $pendingUsers = $stmt->fetchAll();
         </h2>
 
         <a
-            href="dashboard.php"
+            href="dashboard"
             class="btn btn-secondary"
         >
             Kembali

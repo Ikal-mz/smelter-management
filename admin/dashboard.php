@@ -471,7 +471,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <div class="container-fluid">
 
         <a
-            href="dashboard.php"
+            href="dashboard"
             class="navbar-brand"
         >
             Smelter Management
@@ -484,7 +484,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
             &nbsp; | &nbsp;
 
             <a
-                href="../auth/logout.php"
+                href="../auth/logout"
                 class="text-white text-decoration-none"
             >
                 Logout
@@ -517,7 +517,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
             <div class="d-grid gap-2">
 
                 <a
-                    href="dashboard.php"
+                    href="dashboard"
                     class="btn btn-warning menu-link"
                 >
                     Dashboard
@@ -525,7 +525,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 
                 <a
-                    href="users.php"
+                    href="users"
                     class="btn btn-outline-warning menu-link"
                 >
                     User Management
@@ -542,7 +542,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 
                 <a
-                    href="divisions.php"
+                    href="divisions"
                     class="btn btn-outline-warning menu-link"
                 >
                     Divisi
@@ -550,7 +550,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 
                 <a
-                    href="smelters.php"
+                    href="smelters"
                     class="btn btn-outline-warning menu-link"
                 >
                     Smelter
@@ -558,7 +558,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 
                 <a
-                    href="teams.php"
+                    href="teams"
                     class="btn btn-outline-warning menu-link"
                 >
                     Team
@@ -566,7 +566,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 
                 <a
-                    href="access-requests.php"
+                    href="access-requests"
                     class="btn btn-outline-warning menu-link"
                 >
                     Access Request
@@ -728,7 +728,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="col-6 col-lg-3">
 
                     <a
-                        href="users.php?status=pending"
+                        href="users?status=pending"
                         class="text-decoration-none text-dark"
                     >
 
@@ -764,7 +764,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="col-6 col-lg-3">
 
                     <a
-                        href="users.php?status=active"
+                        href="users?status=active"
                         class="text-decoration-none text-dark"
                     >
 
@@ -800,7 +800,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="col-6 col-lg-3">
 
                     <a
-                        href="users.php?status=suspended"
+                        href="users?status=suspended"
                         class="text-decoration-none text-dark"
                     >
 
@@ -845,7 +845,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="col-6 col-lg-4">
 
                     <a
-                        href="divisions.php"
+                        href="divisions"
                         class="text-decoration-none text-dark"
                     >
 
@@ -873,7 +873,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="col-6 col-lg-4">
 
                     <a
-                        href="smelters.php"
+                        href="smelters"
                         class="text-decoration-none text-dark"
                     >
 
@@ -901,7 +901,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="col-6 col-lg-4">
 
                     <a
-                        href="teams.php"
+                        href="teams"
                         class="text-decoration-none text-dark"
                     >
 
@@ -944,7 +944,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="col-6 col-lg-4">
 
                     <a
-                        href="access-requests.php"
+                        href="access-requests"
                         class="text-decoration-none text-dark"
                     >
 
@@ -978,7 +978,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="col-6 col-lg-4">
 
                     <a
-                        href="access-requests.php"
+                        href="access-requests"
                         class="text-decoration-none text-dark"
                     >
 
@@ -1012,7 +1012,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="col-6 col-lg-4">
 
                     <a
-                        href="access-requests.php"
+                        href="access-requests"
                         class="text-decoration-none text-dark"
                     >
 
@@ -1058,7 +1058,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         </strong>
 
                         <a
-                            href="access-requests.php"
+                            href="access-requests"
                             class="btn btn-sm btn-outline-primary"
                         >
                             Lihat Semua
@@ -1213,7 +1213,7 @@ $latestRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                         <td>
 
                                             <a
-                                                href="access-requests.php"
+                                                href="access-requests"
                                                 class="btn btn-sm btn-primary"
                                             >
                                                 Proses

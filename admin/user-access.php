@@ -1150,7 +1150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $_SESSION['flash_success'] = $success;
 
         header(
-            'Location: user-access.php?id=' . $userId
+            'Location: user-access?id=' . $userId
         );
 
         exit;
@@ -1161,7 +1161,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $_SESSION['flash_error'] = $error;
 
         header(
-            'Location: user-access.php?id=' . $userId
+            'Location: user-access?id=' . $userId
         );
 
         exit;
@@ -1358,7 +1358,7 @@ foreach ($userAccess as $access) {
     <div class="container-fluid">
 
         <a
-            href="dashboard.php"
+            href="dashboard"
             class="navbar-brand"
         >
             Smelter Management
@@ -1371,7 +1371,7 @@ foreach ($userAccess as $access) {
             &nbsp; | &nbsp;
 
             <a
-                href="../auth/logout.php"
+                href="../auth/logout"
                 class="text-white"
             >
                 Logout
@@ -1408,14 +1408,14 @@ foreach ($userAccess as $access) {
         <div>
 
             <a
-                href="user-detail.php?id=<?= (int) $user['id'] ?>"
+                href="user-detail?id=<?= (int) $user['id'] ?>"
                 class="btn btn-secondary"
             >
                 ← Detail User
             </a>
 
             <a
-                href="users.php"
+                href="users"
                 class="btn btn-outline-secondary"
             >
                 Daftar User
@@ -2291,7 +2291,7 @@ if (grantSmelter && grantTeam) {
             try {
 
                 const response = await fetch(
-                    '../api/get-register-teams.php?smelter_id='
+                    '../api/get-register-teams?smelter_id='
                     + encodeURIComponent(smelterId)
                 );
 

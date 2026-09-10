@@ -1274,7 +1274,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     <div class="text-center mt-3">
 
-                        <a href="login.php">
+                        <a href="login">
                             Sudah punya akun? Login
                         </a>
 
@@ -1374,7 +1374,7 @@ async function loadSmelters(
 
         const response =
             await fetch(
-                '../api/get-smelters.php?division_id=' +
+                '../api/get-smelters?division_id=' +
                 encodeURIComponent(
                     divisionId
                 )
@@ -1463,7 +1463,7 @@ async function loadTeams(
 
         const response =
             await fetch(
-                '../api/get-register-teams.php?smelter_id=' +
+                '../api/get-register-teams?smelter_id=' +
                 encodeURIComponent(
                     smelterId
                 )

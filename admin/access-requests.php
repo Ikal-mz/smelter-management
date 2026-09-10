@@ -1020,7 +1020,7 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
         <div>
 
             <a
-                href="dashboard.php"
+                href="dashboard"
                 class="btn btn-outline-light btn-sm"
             >
                 Dashboard

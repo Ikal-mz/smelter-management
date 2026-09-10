@@ -117,7 +117,7 @@ $pendingForemen = (int) $stmt->fetchColumn();
 
             &nbsp; | &nbsp;
 
-            <a href="../auth/logout.php" class="btn btn-sm btn-danger">
+            <a href="../auth/logout" class="btn btn-sm btn-danger">
                 Logout
             </a>
         </div>
@@ -137,12 +137,12 @@ $pendingForemen = (int) $stmt->fetchColumn();
 
                     <hr>
 
-                    <a href="dashboard.php"
+                    <a href="dashboard"
                        class="btn btn-primary w-100 mb-2">
                         Dashboard
                     </a>
 
-                    <a href="foremen.php"
+                    <a href="foremen"
                        class="btn btn-outline-primary w-100 mb-2">
                         Approval Foreman
                         <?php if ($pendingForemen > 0): ?>
@@ -152,12 +152,12 @@ $pendingForemen = (int) $stmt->fetchColumn();
                         <?php endif; ?>
                     </a>
 
-                    <a href="my-access.php"
+                    <a href="my-access"
                         class="btn btn-outline-secondary w-100 mb-2">
                         Akses Saya
                     </a>
 
-                    <a href="access-requests.php"
+                    <a href="access-requests"
                         class="btn btn-outline-warning w-100">
                         Request Smelter
                     </a>

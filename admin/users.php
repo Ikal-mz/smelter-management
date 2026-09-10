@@ -29,7 +29,7 @@ $csrfToken = $_SESSION['csrf_token'];
 function redirectUsers(string $type, string $message): void
 {
     header(
-        'Location: users.php?' .
+        'Location: users?' .
         http_build_query([
             $type => $message
         ])
@@ -2113,7 +2113,7 @@ function roleBadge(string $role): string
     <div class="container-fluid">
 
         <a
-            href="dashboard.php"
+            href="dashboard"
             class="navbar-brand"
         >
             Smelter Management
@@ -2129,7 +2129,7 @@ function roleBadge(string $role): string
             &nbsp; | &nbsp;
 
             <a
-                href="../auth/logout.php"
+                href="../auth/logout"
                 class="text-white text-decoration-none"
             >
                 Logout
@@ -2165,7 +2165,7 @@ function roleBadge(string $role): string
 
 
     <a
-        href="dashboard.php"
+        href="dashboard"
         class="btn btn-secondary"
     >
         Kembali
@@ -2236,7 +2236,7 @@ function roleBadge(string $role): string
     <div class="col-6 col-md-2">
 
         <a
-            href="users.php?status=all"
+            href="users?status=all"
             class="text-decoration-none"
         >
 
@@ -2266,7 +2266,7 @@ function roleBadge(string $role): string
     <div class="col-6 col-md-2">
 
         <a
-            href="users.php?status=pending"
+            href="users?status=pending"
             class="text-decoration-none"
         >
 
@@ -2296,7 +2296,7 @@ function roleBadge(string $role): string
     <div class="col-6 col-md-2">
 
         <a
-            href="users.php?status=active"
+            href="users?status=active"
             class="text-decoration-none"
         >
 
@@ -2326,7 +2326,7 @@ function roleBadge(string $role): string
     <div class="col-6 col-md-2">
 
         <a
-            href="users.php?status=suspended"
+            href="users?status=suspended"
             class="text-decoration-none"
         >
 
@@ -2356,7 +2356,7 @@ function roleBadge(string $role): string
     <div class="col-6 col-md-2">
 
         <a
-            href="users.php?status=rejected"
+            href="users?status=rejected"
             class="text-decoration-none"
         >
 
@@ -2386,7 +2386,7 @@ function roleBadge(string $role): string
     <div class="col-6 col-md-2">
 
         <a
-            href="users.php?status=deleted"
+            href="users?status=deleted"
             class="text-decoration-none"
         >
 
@@ -2546,7 +2546,7 @@ function roleBadge(string $role): string
             <div class="col-md-1">
 
                 <a
-                    href="users.php"
+                    href="users"
                     class="btn btn-outline-secondary w-100"
                 >
                     Reset
@@ -2832,7 +2832,7 @@ function roleBadge(string $role): string
                                     <!-- DETAIL -->
 
                                     <a
-                                        href="user-detail.php?id=<?= (int) $user['id'] ?>"
+                                        href="user-detail?id=<?= (int) $user['id'] ?>"
                                         class="btn btn-sm btn-outline-primary"
                                     >
                                         Detail
@@ -2850,7 +2850,7 @@ function roleBadge(string $role): string
                                     ): ?>
 
                                         <a
-                                            href="user-access.php?id=<?= (int) $user['id'] ?>"
+                                            href="user-access?id=<?= (int) $user['id'] ?>"
                                             class="btn btn-sm btn-outline-info"
                                         >
                                             Kelola Akses

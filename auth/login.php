@@ -85,15 +85,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             switch ($user['role_name']) {
 
                 case 'admin':
-                    header('Location: ../admin/dashboard.php');
+                    header('Location: ../admin/dashboard');
                     exit;
 
                 case 'spv':
-                    header('Location: ../spv/dashboard.php');
+                    header('Location: ../spv/dashboard');
                     exit;
 
                 case 'foreman':
-                    header('Location: ../foreman/dashboard.php');
+                    header('Location: ../foreman/dashboard');
                     exit;
 
                 default:
@@ -391,7 +391,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         <div class="register-link">
             Belum memiliki akun?
-            <a href="register.php">
+            <a href="register">
                 Daftar di sini
             </a>
         </div>

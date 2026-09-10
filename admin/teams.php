@@ -3,132 +3,120 @@
 require_once __DIR__ . '/../middleware/admin.php';
 require_once __DIR__ . '/../config/database.php';
 
-$error = '';
-$success = '';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
-$editTeam = null;
+if (!isset($pdo) || !($pdo instanceof PDO)) {
+    die('Koneksi database tidak tersedia.');
+}
 
+$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
 /*
 |--------------------------------------------------------------------------
-| DELETE / NONAKTIFKAN TEAM
-|--------------------------------------------------------------------------
-|
-| Kita tidak melakukan DELETE sebenarnya.
-| Team dibuat inactive agar history tetap aman.
+| CSRF
 |--------------------------------------------------------------------------
 */
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 
-if (
-    $_SERVER['REQUEST_METHOD'] === 'POST' &&
-    isset($_POST['action'])
-) {
+$csrfToken = $_SESSION['csrf_token'];
 
-    $action = $_POST['action'];
+/*
+|--------------------------------------------------------------------------
+| Helper
+|--------------------------------------------------------------------------
+*/
+function redirectTeams(array $params = []): never
+{
+    $query = http_build_query($params);
 
-    if ($action === 'toggle_status') {
+    header(
+        'Location: teams' . ($query ? '?' . $query : '')
+    );
+    exit;
+}
 
-        $teamId = filter_input(
-            INPUT_POST,
-            'team_id',
-            FILTER_VALIDATE_INT
-        );
+function postValue(string $key, string $default = ''): string
+{
+    return trim((string) ($_POST[$key] ?? $default));
+}
 
-        if (!$teamId) {
+function getInt(string $key): int
+{
+    return (int) ($_GET[$key] ?? 0);
+}
 
-            $error = 'Team tidak valid.';
+/*
+|--------------------------------------------------------------------------
+| Flash Message
+|--------------------------------------------------------------------------
+*/
+$success = $_SESSION['success'] ?? '';
+$error   = $_SESSION['error'] ?? '';
 
-        } else {
+unset($_SESSION['success'], $_SESSION['error']);
 
-            $stmt = $pdo->prepare("
-                SELECT status
-                FROM teams
-                WHERE id = ?
-                LIMIT 1
-            ");
+/*
+|--------------------------------------------------------------------------
+| Handle POST
+|--------------------------------------------------------------------------
+*/
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-            $stmt->execute([$teamId]);
+    $postedToken = $_POST['csrf_token'] ?? '';
 
-            $team = $stmt->fetch();
-
-            if (!$team) {
-
-                $error = 'Team tidak ditemukan.';
-
-            } else {
-
-                $newStatus =
-                    $team['status'] === 'active'
-                    ? 'inactive'
-                    : 'active';
-
-                $stmt = $pdo->prepare("
-                    UPDATE teams
-                    SET status = ?
-                    WHERE id = ?
-                ");
-
-                $stmt->execute([
-                    $newStatus,
-                    $teamId
-                ]);
-
-                $success =
-                    'Status Team berhasil diperbarui.';
-            }
-        }
+    if (
+        !$postedToken ||
+        !hash_equals($_SESSION['csrf_token'], $postedToken)
+    ) {
+        $_SESSION['error'] = 'Token keamanan tidak valid.';
+        redirectTeams();
     }
 
+    $action = postValue('action');
 
-    /*
-    |--------------------------------------------------------------------------
-    | Tambah Team
-    |--------------------------------------------------------------------------
-    */
+    try {
 
-    if ($action === 'create') {
+        /*
+        |--------------------------------------------------------------------------
+        | ADD TEAM
+        |--------------------------------------------------------------------------
+        */
+        if ($action === 'add') {
 
-        $divisionId = filter_input(
-            INPUT_POST,
-            'division_id',
-            FILTER_VALIDATE_INT
-        );
+            $divisionId = (int) ($_POST['division_id'] ?? 0);
+            $smelterId  = (int) ($_POST['smelter_id'] ?? 0);
+            $name       = postValue('name');
+            $link       = postValue('link');
 
-        $smelterId = filter_input(
-            INPUT_POST,
-            'smelter_id',
-            FILTER_VALIDATE_INT
-        );
+            if ($divisionId <= 0) {
+                throw new RuntimeException('Divisi wajib dipilih.');
+            }
 
-        $name = trim(
-            $_POST['name'] ?? ''
-        );
+            if ($smelterId <= 0) {
+                throw new RuntimeException('Smelter wajib dipilih.');
+            }
 
-        $link = trim(
-            $_POST['link'] ?? ''
-        );
+            if ($name === '') {
+                throw new RuntimeException('Nama team wajib diisi.');
+            }
 
+            if ($link === '') {
+                throw new RuntimeException('Link team wajib diisi.');
+            }
 
-        if (
-            !$divisionId ||
-            !$smelterId ||
-            $name === '' ||
-            $link === ''
-        ) {
-
-            $error =
-                'Divisi, Smelter, Nama Team, dan Link wajib diisi.';
-
-        } elseif (!filter_var($link, FILTER_VALIDATE_URL)) {
-
-            $error = 'Format link tidak valid.';
-
-        } else {
+            if (!filter_var($link, FILTER_VALIDATE_URL)) {
+                throw new RuntimeException('Format link tidak valid.');
+            }
 
             /*
-             * Pastikan Smelter memang milik Division.
-             */
-
+            |--------------------------------------------------------------------------
+            | Pastikan smelter benar-benar milik divisi
+            |--------------------------------------------------------------------------
+            */
             $stmt = $pdo->prepare("
                 SELECT id
                 FROM smelters
@@ -143,116 +131,116 @@ if (
                 $divisionId
             ]);
 
-            if (!$stmt->fetch()) {
-
-                $error =
-                    'Smelter tidak sesuai dengan Divisi.';
-
-            } else {
-
-                /*
-                 * Cek nama Team duplikat.
-                 */
-
-                $stmt = $pdo->prepare("
-                    SELECT id
-                    FROM teams
-                    WHERE smelter_id = ?
-                      AND name = ?
-                    LIMIT 1
-                ");
-
-                $stmt->execute([
-                    $smelterId,
-                    $name
-                ]);
-
-                if ($stmt->fetch()) {
-
-                    $error =
-                        'Nama Team sudah digunakan pada Smelter tersebut.';
-
-                } else {
-
-                    $stmt = $pdo->prepare("
-                        INSERT INTO teams (
-                            smelter_id,
-                            name,
-                            link,
-                            status
-                        )
-                        VALUES (?, ?, ?, 'active')
-                    ");
-
-                    $stmt->execute([
-                        $smelterId,
-                        $name,
-                        $link
-                    ]);
-
-                    $success =
-                        'Team berhasil ditambahkan.';
-                }
+            if (!$stmt->fetchColumn()) {
+                throw new RuntimeException(
+                    'Smelter tidak valid untuk divisi yang dipilih.'
+                );
             }
-        }
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Update Team
-    |--------------------------------------------------------------------------
-    */
-
-    if ($action === 'update') {
-
-        $teamId = filter_input(
-            INPUT_POST,
-            'team_id',
-            FILTER_VALIDATE_INT
-        );
-
-        $divisionId = filter_input(
-            INPUT_POST,
-            'division_id',
-            FILTER_VALIDATE_INT
-        );
-
-        $smelterId = filter_input(
-            INPUT_POST,
-            'smelter_id',
-            FILTER_VALIDATE_INT
-        );
-
-        $name = trim(
-            $_POST['name'] ?? ''
-        );
-
-        $link = trim(
-            $_POST['link'] ?? ''
-        );
-
-
-        if (
-            !$teamId ||
-            !$divisionId ||
-            !$smelterId ||
-            $name === '' ||
-            $link === ''
-        ) {
-
-            $error = 'Data Team belum lengkap.';
-
-        } elseif (!filter_var($link, FILTER_VALIDATE_URL)) {
-
-            $error = 'Format link tidak valid.';
-
-        } else {
 
             /*
-             * Pastikan Team ada.
-             */
+            |--------------------------------------------------------------------------
+            | Cek duplicate team
+            |--------------------------------------------------------------------------
+            */
+            $stmt = $pdo->prepare("
+                SELECT id
+                FROM teams
+                WHERE smelter_id = ?
+                  AND name = ?
+                LIMIT 1
+            ");
 
+            $stmt->execute([
+                $smelterId,
+                $name
+            ]);
+
+            if ($stmt->fetchColumn()) {
+                throw new RuntimeException(
+                    'Team dengan nama tersebut sudah ada pada smelter ini.'
+                );
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Insert
+            |--------------------------------------------------------------------------
+            */
+            $stmt = $pdo->prepare("
+                INSERT INTO teams (
+                    smelter_id,
+                    name,
+                    link,
+                    status,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    ?,
+                    ?,
+                    ?,
+                    'active',
+                    NOW(),
+                    NOW()
+                )
+            ");
+
+            $stmt->execute([
+                $smelterId,
+                $name,
+                $link
+            ]);
+
+            $_SESSION['success'] = 'Team berhasil ditambahkan.';
+
+            redirectTeams([
+                'division_id' => $divisionId,
+                'smelter_id'  => $smelterId
+            ]);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | EDIT TEAM
+        |--------------------------------------------------------------------------
+        */
+        if ($action === 'edit') {
+
+            $teamId     = (int) ($_POST['team_id'] ?? 0);
+            $divisionId = (int) ($_POST['division_id'] ?? 0);
+            $smelterId  = (int) ($_POST['smelter_id'] ?? 0);
+            $name       = postValue('name');
+            $link       = postValue('link');
+
+            if ($teamId <= 0) {
+                throw new RuntimeException('Team tidak valid.');
+            }
+
+            if ($divisionId <= 0) {
+                throw new RuntimeException('Divisi wajib dipilih.');
+            }
+
+            if ($smelterId <= 0) {
+                throw new RuntimeException('Smelter wajib dipilih.');
+            }
+
+            if ($name === '') {
+                throw new RuntimeException('Nama team wajib diisi.');
+            }
+
+            if ($link === '') {
+                throw new RuntimeException('Link team wajib diisi.');
+            }
+
+            if (!filter_var($link, FILTER_VALIDATE_URL)) {
+                throw new RuntimeException('Format link tidak valid.');
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Pastikan team exists
+            |--------------------------------------------------------------------------
+            */
             $stmt = $pdo->prepare("
                 SELECT id
                 FROM teams
@@ -260,108 +248,304 @@ if (
                 LIMIT 1
             ");
 
+            $stmt->execute([$teamId]);
+
+            if (!$stmt->fetchColumn()) {
+                throw new RuntimeException('Team tidak ditemukan.');
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Pastikan smelter milik divisi
+            |--------------------------------------------------------------------------
+            */
+            $stmt = $pdo->prepare("
+                SELECT id
+                FROM smelters
+                WHERE id = ?
+                  AND division_id = ?
+                  AND status = 'active'
+                LIMIT 1
+            ");
+
             $stmt->execute([
+                $smelterId,
+                $divisionId
+            ]);
+
+            if (!$stmt->fetchColumn()) {
+                throw new RuntimeException(
+                    'Smelter tidak valid untuk divisi yang dipilih.'
+                );
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Cek duplicate nama team selain team yang sedang diedit
+            |--------------------------------------------------------------------------
+            */
+            $stmt = $pdo->prepare("
+                SELECT id
+                FROM teams
+                WHERE smelter_id = ?
+                  AND name = ?
+                  AND id <> ?
+                LIMIT 1
+            ");
+
+            $stmt->execute([
+                $smelterId,
+                $name,
                 $teamId
             ]);
 
-            if (!$stmt->fetch()) {
-
-                $error = 'Team tidak ditemukan.';
-
-            } else {
-
-                /*
-                 * Validasi Smelter.
-                 */
-
-                $stmt = $pdo->prepare("
-                    SELECT id
-                    FROM smelters
-                    WHERE id = ?
-                      AND division_id = ?
-                      AND status = 'active'
-                    LIMIT 1
-                ");
-
-                $stmt->execute([
-                    $smelterId,
-                    $divisionId
-                ]);
-
-                if (!$stmt->fetch()) {
-
-                    $error =
-                        'Smelter tidak sesuai dengan Divisi.';
-
-                } else {
-
-                    /*
-                     * Cek nama Team.
-                     */
-
-                    $stmt = $pdo->prepare("
-                        SELECT id
-                        FROM teams
-                        WHERE smelter_id = ?
-                          AND name = ?
-                          AND id != ?
-                        LIMIT 1
-                    ");
-
-                    $stmt->execute([
-                        $smelterId,
-                        $name,
-                        $teamId
-                    ]);
-
-                    if ($stmt->fetch()) {
-
-                        $error =
-                            'Nama Team sudah digunakan.';
-
-                    } else {
-
-                        $stmt = $pdo->prepare("
-                            UPDATE teams
-                            SET
-                                smelter_id = ?,
-                                name = ?,
-                                link = ?
-                            WHERE id = ?
-                        ");
-
-                        $stmt->execute([
-                            $smelterId,
-                            $name,
-                            $link,
-                            $teamId
-                        ]);
-
-                        $success =
-                            'Team berhasil diperbarui.';
-                    }
-                }
+            if ($stmt->fetchColumn()) {
+                throw new RuntimeException(
+                    'Nama team tersebut sudah digunakan pada smelter ini.'
+                );
             }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Update
+            |--------------------------------------------------------------------------
+            */
+            $stmt = $pdo->prepare("
+                UPDATE teams
+                SET
+                    smelter_id = ?,
+                    name = ?,
+                    link = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+
+            $stmt->execute([
+                $smelterId,
+                $name,
+                $link,
+                $teamId
+            ]);
+
+            $_SESSION['success'] = 'Team berhasil diperbarui.';
+
+            redirectTeams([
+                'division_id' => $divisionId,
+                'smelter_id'  => $smelterId
+            ]);
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | TOGGLE STATUS
+        |--------------------------------------------------------------------------
+        */
+        if ($action === 'toggle_status') {
+
+            $teamId = (int) ($_POST['team_id'] ?? 0);
+
+            if ($teamId <= 0) {
+                throw new RuntimeException('Team tidak valid.');
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Ambil status saat ini
+            |--------------------------------------------------------------------------
+            */
+            $stmt = $pdo->prepare("
+                SELECT
+                    t.id,
+                    t.status,
+                    s.division_id,
+                    t.smelter_id
+                FROM teams t
+                INNER JOIN smelters s
+                    ON s.id = t.smelter_id
+                WHERE t.id = ?
+                LIMIT 1
+            ");
+
+            $stmt->execute([$teamId]);
+
+            $team = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$team) {
+                throw new RuntimeException('Team tidak ditemukan.');
+            }
+
+            $newStatus = $team['status'] === 'active'
+                ? 'inactive'
+                : 'active';
+
+            $stmt = $pdo->prepare("
+                UPDATE teams
+                SET
+                    status = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+
+            $stmt->execute([
+                $newStatus,
+                $teamId
+            ]);
+
+            $_SESSION['success'] =
+                $newStatus === 'active'
+                    ? 'Team berhasil diaktifkan.'
+                    : 'Team berhasil dinonaktifkan.';
+
+            redirectTeams([
+                'division_id' => (int) $team['division_id'],
+                'smelter_id'  => (int) $team['smelter_id']
+            ]);
+        }
+
+        throw new RuntimeException('Aksi tidak dikenali.');
+
+    } catch (Throwable $e) {
+
+        $_SESSION['error'] = $e->getMessage();
+
+        redirectTeams([
+            'division_id' => (int) ($_POST['division_id'] ?? 0),
+            'smelter_id'  => (int) ($_POST['smelter_id'] ?? 0)
+        ]);
     }
 }
 
+/*
+|--------------------------------------------------------------------------
+| Filter
+|--------------------------------------------------------------------------
+*/
+$selectedDivision = getInt('division_id');
+$selectedSmelter  = getInt('smelter_id');
 
 /*
 |--------------------------------------------------------------------------
-| Mode Edit
+| Get Divisions
 |--------------------------------------------------------------------------
 */
+$stmt = $pdo->query("
+    SELECT
+        id,
+        name
+    FROM divisions
+    WHERE status = 'active'
+    ORDER BY name ASC
+");
 
-if (
-    isset($_GET['edit']) &&
-    filter_var(
-        $_GET['edit'],
-        FILTER_VALIDATE_INT
-    )
-) {
+$divisions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    $editId = (int) $_GET['edit'];
+/*
+|--------------------------------------------------------------------------
+| Get Smelters
+|--------------------------------------------------------------------------
+*/
+$smelters = [];
+
+if ($selectedDivision > 0) {
+
+    $stmt = $pdo->prepare("
+        SELECT
+            id,
+            name
+        FROM smelters
+        WHERE division_id = ?
+          AND status = 'active'
+        ORDER BY name ASC
+    ");
+
+    $stmt->execute([$selectedDivision]);
+
+    $smelters = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/*
+|--------------------------------------------------------------------------
+| Get Teams
+|--------------------------------------------------------------------------
+*/
+$sql = "
+    SELECT
+        t.id,
+        t.smelter_id,
+        t.name,
+        t.link,
+        t.status,
+        t.created_at,
+        t.updated_at,
+
+        s.name AS smelter_name,
+        s.division_id,
+
+        d.name AS division_name
+
+    FROM teams t
+
+    INNER JOIN smelters s
+        ON s.id = t.smelter_id
+
+    INNER JOIN divisions d
+        ON d.id = s.division_id
+
+    WHERE 1 = 1
+";
+
+$params = [];
+
+if ($selectedDivision > 0) {
+    $sql .= " AND d.id = ?";
+    $params[] = $selectedDivision;
+}
+
+if ($selectedSmelter > 0) {
+    $sql .= " AND s.id = ?";
+    $params[] = $selectedSmelter;
+}
+
+$sql .= "
+    ORDER BY
+        d.name ASC,
+        s.name ASC,
+        t.name ASC
+";
+
+$stmt = $pdo->prepare($sql);
+$stmt->execute($params);
+
+$teams = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+/*
+|--------------------------------------------------------------------------
+| Statistics
+|--------------------------------------------------------------------------
+*/
+$totalTeams = count($teams);
+
+$activeTeams = 0;
+$inactiveTeams = 0;
+
+foreach ($teams as $team) {
+    if ($team['status'] === 'active') {
+        $activeTeams++;
+    } else {
+        $inactiveTeams++;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Edit Data
+|--------------------------------------------------------------------------
+*/
+$editTeam = null;
+
+$editId = getInt('edit');
+
+if ($editId > 0) {
 
     $stmt = $pdo->prepare("
         SELECT
@@ -378,73 +562,21 @@ if (
         LIMIT 1
     ");
 
-    $stmt->execute([
-        $editId
-    ]);
+    $stmt->execute([$editId]);
 
-    $editTeam = $stmt->fetch();
+    $editTeam = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if (!$editTeam) {
-        $error = 'Team tidak ditemukan.';
+    if ($editTeam) {
+        $selectedDivision = (int) $editTeam['division_id'];
+        $selectedSmelter  = (int) $editTeam['smelter_id'];
     }
 }
 
-
-/*
-|--------------------------------------------------------------------------
-| Ambil Division
-|--------------------------------------------------------------------------
-*/
-
-$stmt = $pdo->query("
-    SELECT id, name
-    FROM divisions
-    WHERE status = 'active'
-    ORDER BY name
-");
-
-$divisions = $stmt->fetchAll();
-
-
-/*
-|--------------------------------------------------------------------------
-| Ambil Semua Team
-|--------------------------------------------------------------------------
-*/
-
-$stmt = $pdo->query("
-    SELECT
-        t.id,
-        t.name AS team_name,
-        t.link,
-        t.status,
-        s.id AS smelter_id,
-        s.name AS smelter_name,
-        d.id AS division_id,
-        d.name AS division_name
-    FROM teams t
-
-    INNER JOIN smelters s
-        ON s.id = t.smelter_id
-
-    INNER JOIN divisions d
-        ON d.id = s.division_id
-
-    ORDER BY
-        d.name,
-        s.name,
-        t.name
-");
-
-$teams = $stmt->fetchAll();
-
 ?>
-
 <!DOCTYPE html>
 <html lang="id">
 
 <head>
-
     <meta charset="UTF-8">
 
     <meta
@@ -452,575 +584,900 @@ $teams = $stmt->fetchAll();
         content="width=device-width, initial-scale=1.0"
     >
 
-    <title>Manajemen Team</title>
+    <title>Manajemen Team - Admin</title>
 
     <link
         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
         rel="stylesheet"
     >
 
+    <style>
+        body {
+            background: #f5f6f8;
+        }
+
+        .sidebar {
+            min-height: 100vh;
+            background: #212529;
+        }
+
+        .sidebar a {
+            color: #adb5bd;
+            text-decoration: none;
+            display: block;
+            padding: 10px 16px;
+        }
+
+        .sidebar a:hover,
+        .sidebar a.active {
+            background: #343a40;
+            color: #fff;
+        }
+
+        .stat-card {
+            border: 0;
+            border-radius: 12px;
+        }
+
+        .table td,
+        .table th {
+            vertical-align: middle;
+        }
+
+        .team-link {
+            max-width: 280px;
+            display: inline-block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    </style>
 </head>
 
-<body class="bg-light">
+<body>
 
+<div class="container-fluid">
+    <div class="row">
 
-<nav class="navbar navbar-dark bg-dark">
+        <!-- SIDEBAR -->
+        <aside class="col-md-2 col-lg-2 px-0 sidebar">
 
-    <div class="container-fluid">
+            <div class="p-3 text-white">
+                <h5 class="mb-0">Admin Panel</h5>
+            </div>
 
-        <a
-            href="dashboard.php"
-            class="navbar-brand"
-        >
-            Smelter Management
-        </a>
+            <nav>
 
-        <div class="text-white">
+                <a href="dashboard">
+                    Dashboard
+                </a>
 
-            <?= htmlspecialchars($_SESSION['name']) ?>
+                <a href="users">
+                    User Management
+                </a>
 
-            &nbsp; | &nbsp;
+                <a href="divisions">
+                    Divisi
+                </a>
 
-            <a
-                href="../auth/logout.php"
-                class="text-white"
-            >
-                Logout
-            </a>
+                <a href="smelters">
+                    Smelter
+                </a>
 
-        </div>
+                <a href="teams" class="active">
+                    Team
+                </a>
 
-    </div>
+                <a href="access-requests">
+                    Access Request
+                </a>
 
-</nav>
+            </nav>
 
+        </aside>
 
-<div class="container py-4">
+        <!-- CONTENT -->
+        <main class="col-md-10 col-lg-10 p-4">
 
+            <div class="d-flex justify-content-between align-items-center mb-4">
 
-    <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h2 class="mb-1">
+                        Manajemen Team
+                    </h2>
 
-        <h2>
-            Manajemen Team
-        </h2>
+                    <p class="text-muted mb-0">
+                        Kelola team dan link berdasarkan smelter.
+                    </p>
+                </div>
 
-        <a
-            href="dashboard.php"
-            class="btn btn-secondary"
-        >
-            Kembali
-        </a>
+                <?php if (!$editTeam): ?>
 
-    </div>
-
-
-    <?php if ($error): ?>
-
-        <div class="alert alert-danger">
-            <?= htmlspecialchars($error) ?>
-        </div>
-
-    <?php endif; ?>
-
-
-    <?php if ($success): ?>
-
-        <div class="alert alert-success">
-            <?= htmlspecialchars($success) ?>
-        </div>
-
-    <?php endif; ?>
-
-
-    <!-- FORM -->
-
-    <div class="card shadow-sm mb-4">
-
-        <div class="card-header">
-
-            <strong>
-                <?= $editTeam ? 'Edit Team' : 'Tambah Team' ?>
-            </strong>
-
-        </div>
-
-        <div class="card-body">
-
-            <form method="POST">
-
-                <input
-                    type="hidden"
-                    name="action"
-                    value="<?= $editTeam ? 'update' : 'create' ?>"
-                >
-
-                <?php if ($editTeam): ?>
-
-                    <input
-                        type="hidden"
-                        name="team_id"
-                        value="<?= $editTeam['id'] ?>"
+                    <a
+                        href="teams#team-form"
+                        class="btn btn-primary"
                     >
+                        + Tambah Team
+                    </a>
+
+                <?php else: ?>
+
+                    <a
+                        href="teams"
+                        class="btn btn-outline-secondary"
+                    >
+                        Batal Edit
+                    </a>
 
                 <?php endif; ?>
 
+            </div>
 
-                <div class="row">
+            <!-- FLASH -->
+            <?php if ($success): ?>
 
+                <div class="alert alert-success alert-dismissible fade show">
+                    <?= htmlspecialchars($success) ?>
 
-                    <!-- Division -->
+                    <button
+                        type="button"
+                        class="btn-close"
+                        data-bs-dismiss="alert"
+                    ></button>
+                </div>
 
-                    <div class="col-md-4 mb-3">
+            <?php endif; ?>
 
-                        <label class="form-label">
-                            Divisi
-                        </label>
+            <?php if ($error): ?>
 
-                        <select
-                            name="division_id"
-                            id="division_id"
-                            class="form-select"
-                            required
-                        >
+                <div class="alert alert-danger alert-dismissible fade show">
+                    <?= htmlspecialchars($error) ?>
 
-                            <option value="">
-                                -- Pilih Divisi --
-                            </option>
+                    <button
+                        type="button"
+                        class="btn-close"
+                        data-bs-dismiss="alert"
+                    ></button>
+                </div>
 
-                            <?php foreach ($divisions as $division): ?>
+            <?php endif; ?>
 
-                                <option
-                                    value="<?= $division['id'] ?>"
-                                    <?= $editTeam &&
-                                        $editTeam['division_id'] == $division['id']
-                                        ? 'selected'
-                                        : '' ?>
-                                >
-                                    <?= htmlspecialchars($division['name']) ?>
-                                </option>
+            <!-- STATISTICS -->
+            <div class="row g-3 mb-4">
 
-                            <?php endforeach; ?>
+                <div class="col-md-4">
 
-                        </select>
+                    <div class="card stat-card shadow-sm">
+                        <div class="card-body">
 
+                            <small class="text-muted">
+                                Total Team
+                            </small>
+
+                            <h3 class="mb-0">
+                                <?= $totalTeams ?>
+                            </h3>
+
+                        </div>
                     </div>
 
+                </div>
 
-                    <!-- Smelter -->
+                <div class="col-md-4">
 
-                    <div class="col-md-4 mb-3">
+                    <div class="card stat-card shadow-sm">
+                        <div class="card-body">
 
-                        <label class="form-label">
-                            Smelter
-                        </label>
+                            <small class="text-muted">
+                                Team Aktif
+                            </small>
 
-                        <select
-                            name="smelter_id"
-                            id="smelter_id"
-                            class="form-select"
-                            required
-                            <?= !$editTeam ? 'disabled' : '' ?>
+                            <h3 class="mb-0 text-success">
+                                <?= $activeTeams ?>
+                            </h3>
+
+                        </div>
+                    </div>
+
+                </div>
+
+                <div class="col-md-4">
+
+                    <div class="card stat-card shadow-sm">
+                        <div class="card-body">
+
+                            <small class="text-muted">
+                                Team Nonaktif
+                            </small>
+
+                            <h3 class="mb-0 text-secondary">
+                                <?= $inactiveTeams ?>
+                            </h3>
+
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+
+            <!-- FORM -->
+            <div
+                class="card shadow-sm mb-4"
+                id="team-form"
+            >
+
+                <div class="card-header bg-white">
+
+                    <strong>
+                        <?= $editTeam ? 'Edit Team' : 'Tambah Team' ?>
+                    </strong>
+
+                </div>
+
+                <div class="card-body">
+
+                    <form method="POST">
+
+                        <input
+                            type="hidden"
+                            name="csrf_token"
+                            value="<?= htmlspecialchars($csrfToken) ?>"
                         >
+
+                        <input
+                            type="hidden"
+                            name="action"
+                            value="<?= $editTeam ? 'edit' : 'add' ?>"
+                        >
+
+                        <?php if ($editTeam): ?>
+
+                            <input
+                                type="hidden"
+                                name="team_id"
+                                value="<?= (int) $editTeam['id'] ?>"
+                            >
+
+                        <?php endif; ?>
+
+                        <div class="row g-3">
+
+                            <!-- DIVISION -->
+                            <div class="col-md-4">
+
+                                <label class="form-label">
+                                    Divisi
+                                </label>
+
+                                <select
+                                    name="division_id"
+                                    id="division_id"
+                                    class="form-select"
+                                    required
+                                >
+
+                                    <option value="">
+                                        -- Pilih Divisi --
+                                    </option>
+
+                                    <?php foreach ($divisions as $division): ?>
+
+                                        <option
+                                            value="<?= (int) $division['id'] ?>"
+                                            <?= (
+                                                $selectedDivision === (int) $division['id']
+                                            ) ? 'selected' : '' ?>
+                                        >
+                                            <?= htmlspecialchars($division['name']) ?>
+                                        </option>
+
+                                    <?php endforeach; ?>
+
+                                </select>
+
+                            </div>
+
+                            <!-- SMELTER -->
+                            <div class="col-md-4">
+
+                                <label class="form-label">
+                                    Smelter
+                                </label>
+
+                                <select
+                                    name="smelter_id"
+                                    id="smelter_id"
+                                    class="form-select"
+                                    required
+                                >
+
+                                    <option value="">
+                                        -- Pilih Smelter --
+                                    </option>
+
+                                    <?php foreach ($smelters as $smelter): ?>
+
+                                        <option
+                                            value="<?= (int) $smelter['id'] ?>"
+                                            <?= (
+                                                $selectedSmelter === (int) $smelter['id']
+                                            ) ? 'selected' : '' ?>
+                                        >
+                                            <?= htmlspecialchars($smelter['name']) ?>
+                                        </option>
+
+                                    <?php endforeach; ?>
+
+                                </select>
+
+                            </div>
+
+                            <!-- TEAM -->
+                            <div class="col-md-4">
+
+                                <label class="form-label">
+                                    Nama Team
+                                </label>
+
+                                <input
+                                    type="text"
+                                    name="name"
+                                    class="form-control"
+                                    maxlength="100"
+                                    value="<?= htmlspecialchars(
+                                        $editTeam['name'] ?? ''
+                                    ) ?>"
+                                    placeholder="Contoh: Team A"
+                                    required
+                                >
+
+                            </div>
+
+                            <!-- LINK -->
+                            <div class="col-md-12">
+
+                                <label class="form-label">
+                                    Link Team
+                                </label>
+
+                                <input
+                                    type="url"
+                                    name="link"
+                                    class="form-control"
+                                    value="<?= htmlspecialchars(
+                                        $editTeam['link'] ?? ''
+                                    ) ?>"
+                                    placeholder="https://..."
+                                    required
+                                >
+
+                                <div class="form-text">
+                                    Satu team hanya memiliki satu link.
+                                </div>
+
+                            </div>
+
+                        </div>
+
+                        <div class="mt-4">
+
+                            <button
+                                type="submit"
+                                class="btn btn-primary"
+                            >
+                                <?= $editTeam
+                                    ? 'Simpan Perubahan'
+                                    : 'Tambah Team'
+                                ?>
+                            </button>
 
                             <?php if ($editTeam): ?>
 
-                                <?php
+                                <a
+                                    href="teams"
+                                    class="btn btn-secondary"
+                                >
+                                    Batal
+                                </a>
 
-                                $stmt = $pdo->prepare("
-                                    SELECT id, name
-                                    FROM smelters
-                                    WHERE division_id = ?
-                                      AND status = 'active'
-                                    ORDER BY name
-                                ");
+                            <?php endif; ?>
 
-                                $stmt->execute([
-                                    $editTeam['division_id']
-                                ]);
+                        </div>
 
-                                $editSmelters =
-                                    $stmt->fetchAll();
+                    </form>
 
-                                ?>
+                </div>
+
+            </div>
+
+            <!-- FILTER -->
+            <div class="card shadow-sm mb-4">
+
+                <div class="card-header bg-white">
+
+                    <strong>
+                        Filter Team
+                    </strong>
+
+                </div>
+
+                <div class="card-body">
+
+                    <form
+                        method="GET"
+                        class="row g-3"
+                    >
+
+                        <div class="col-md-5">
+
+                            <label class="form-label">
+                                Divisi
+                            </label>
+
+                            <select
+                                name="division_id"
+                                id="filter_division_id"
+                                class="form-select"
+                            >
 
                                 <option value="">
-                                    -- Pilih Smelter --
+                                    Semua Divisi
                                 </option>
 
-                                <?php foreach ($editSmelters as $smelter): ?>
+                                <?php foreach ($divisions as $division): ?>
 
                                     <option
-                                        value="<?= $smelter['id'] ?>"
-                                        <?= $editTeam['smelter_id'] == $smelter['id']
-                                            ? 'selected'
-                                            : '' ?>
+                                        value="<?= (int) $division['id'] ?>"
+                                        <?= (
+                                            $selectedDivision === (int) $division['id']
+                                        ) ? 'selected' : '' ?>
+                                    >
+                                        <?= htmlspecialchars($division['name']) ?>
+                                    </option>
+
+                                <?php endforeach; ?>
+
+                            </select>
+
+                        </div>
+
+                        <div class="col-md-5">
+
+                            <label class="form-label">
+                                Smelter
+                            </label>
+
+                            <select
+                                name="smelter_id"
+                                id="filter_smelter_id"
+                                class="form-select"
+                            >
+
+                                <option value="">
+                                    Semua Smelter
+                                </option>
+
+                                <?php foreach ($smelters as $smelter): ?>
+
+                                    <option
+                                        value="<?= (int) $smelter['id'] ?>"
+                                        <?= (
+                                            $selectedSmelter === (int) $smelter['id']
+                                        ) ? 'selected' : '' ?>
                                     >
                                         <?= htmlspecialchars($smelter['name']) ?>
                                     </option>
 
                                 <?php endforeach; ?>
 
-                            <?php else: ?>
+                            </select>
 
-                                <option value="">
-                                    -- Pilih Divisi terlebih dahulu --
-                                </option>
-
-                            <?php endif; ?>
-
-                        </select>
-
-                    </div>
-
-
-                    <!-- Team -->
-
-                    <div class="col-md-4 mb-3">
-
-                        <label class="form-label">
-                            Nama Team
-                        </label>
-
-                        <input
-                            type="text"
-                            name="name"
-                            class="form-control"
-                            value="<?= $editTeam
-                                ? htmlspecialchars($editTeam['name'])
-                                : '' ?>"
-                            placeholder="Contoh: Team A"
-                            required
-                        >
-
-                    </div>
-
-
-                    <!-- Link -->
-
-                    <div class="col-md-12 mb-3">
-
-                        <label class="form-label">
-                            Link Team
-                        </label>
-
-                        <input
-                            type="url"
-                            name="link"
-                            class="form-control"
-                            value="<?= $editTeam
-                                ? htmlspecialchars($editTeam['link'])
-                                : '' ?>"
-                            placeholder="https://contoh.com"
-                            required
-                        >
-
-                        <div class="form-text">
-                            Setiap Team wajib memiliki satu link.
                         </div>
+
+                        <div class="col-md-2 d-flex align-items-end">
+
+                            <button
+                                type="submit"
+                                class="btn btn-primary w-100"
+                            >
+                                Filter
+                            </button>
+
+                        </div>
+
+                    </form>
+
+                </div>
+
+            </div>
+
+            <!-- TABLE -->
+            <div class="card shadow-sm">
+
+                <div class="card-header bg-white">
+
+                    <div class="d-flex justify-content-between">
+
+                        <strong>
+                            Daftar Team
+                        </strong>
+
+                        <span class="text-muted">
+                            <?= $totalTeams ?> team
+                        </span>
 
                     </div>
 
                 </div>
 
+                <div class="card-body p-0">
 
-                <button
-                    type="submit"
-                    class="btn btn-primary"
-                >
-                    <?= $editTeam ? 'Update Team' : 'Simpan Team' ?>
-                </button>
+                    <div class="table-responsive">
 
+                        <table class="table table-hover mb-0">
 
-                <?php if ($editTeam): ?>
+                            <thead class="table-light">
 
-                    <a
-                        href="teams.php"
-                        class="btn btn-secondary"
-                    >
-                        Batal
-                    </a>
+                                <tr>
 
-                <?php endif; ?>
+                                    <th width="50">
+                                        #
+                                    </th>
 
-            </form>
+                                    <th>
+                                        Divisi
+                                    </th>
 
-        </div>
+                                    <th>
+                                        Smelter
+                                    </th>
 
-    </div>
+                                    <th>
+                                        Team
+                                    </th>
 
+                                    <th>
+                                        Link
+                                    </th>
 
-    <!-- LIST TEAM -->
+                                    <th>
+                                        Status
+                                    </th>
 
-    <div class="card shadow-sm">
-
-        <div class="card-header">
-
-            <strong>
-                Daftar Team
-            </strong>
-
-        </div>
-
-        <div class="card-body">
-
-            <div class="table-responsive">
-
-                <table class="table table-bordered table-hover">
-
-                    <thead>
-
-                        <tr>
-
-                            <th>
-                                #
-                            </th>
-
-                            <th>
-                                Divisi
-                            </th>
-
-                            <th>
-                                Smelter
-                            </th>
-
-                            <th>
-                                Team
-                            </th>
-
-                            <th>
-                                Link
-                            </th>
-
-                            <th>
-                                Status
-                            </th>
-
-                            <th>
-                                Aksi
-                            </th>
-
-                        </tr>
-
-                    </thead>
-
-                    <tbody>
-
-                    <?php if (!$teams): ?>
-
-                        <tr>
-
-                            <td
-                                colspan="7"
-                                class="text-center"
-                            >
-                                Belum ada Team.
-                            </td>
-
-                        </tr>
-
-                    <?php else: ?>
-
-                        <?php foreach ($teams as $index => $team): ?>
-
-                            <tr>
-
-                                <td>
-                                    <?= $index + 1 ?>
-                                </td>
-
-                                <td>
-                                    <?= htmlspecialchars(
-                                        $team['division_name']
-                                    ) ?>
-                                </td>
-
-                                <td>
-                                    <?= htmlspecialchars(
-                                        $team['smelter_name']
-                                    ) ?>
-                                </td>
-
-                                <td>
-                                    <strong>
-                                        <?= htmlspecialchars(
-                                            $team['team_name']
-                                        ) ?>
-                                    </strong>
-                                </td>
-
-                                <td>
-
-                                    <a
-                                        href="<?= htmlspecialchars(
-                                            $team['link']
-                                        ) ?>"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
+                                    <th
+                                        class="text-end"
+                                        width="180"
                                     >
-                                        Buka Link
-                                    </a>
+                                        Aksi
+                                    </th>
 
-                                </td>
+                                </tr>
 
-                                <td>
+                            </thead>
 
-                                    <?php if (
-                                        $team['status'] === 'active'
-                                    ): ?>
+                            <tbody>
 
-                                        <span class="badge bg-success">
-                                            Active
-                                        </span>
+                            <?php if (!$teams): ?>
 
-                                    <?php else: ?>
+                                <tr>
 
-                                        <span class="badge bg-secondary">
-                                            Inactive
-                                        </span>
-
-                                    <?php endif; ?>
-
-                                </td>
-
-                                <td>
-
-                                    <a
-                                        href="?edit=<?= $team['id'] ?>"
-                                        class="btn btn-sm btn-warning"
+                                    <td
+                                        colspan="7"
+                                        class="text-center py-5 text-muted"
                                     >
-                                        Edit
-                                    </a>
+                                        Belum ada team.
 
+                                    </td>
 
-                                    <form
-                                        method="POST"
-                                        class="d-inline"
-                                    >
+                                </tr>
 
-                                        <input
-                                            type="hidden"
-                                            name="action"
-                                            value="toggle_status"
-                                        >
+                            <?php else: ?>
 
-                                        <input
-                                            type="hidden"
-                                            name="team_id"
-                                            value="<?= $team['id'] ?>"
-                                        >
+                                <?php foreach ($teams as $index => $team): ?>
 
-                                        <button
-                                            type="submit"
-                                            class="btn btn-sm btn-secondary"
-                                        >
-                                            <?= $team['status'] === 'active'
-                                                ? 'Nonaktifkan'
-                                                : 'Aktifkan' ?>
-                                        </button>
+                                    <tr>
 
-                                    </form>
+                                        <td>
+                                            <?= $index + 1 ?>
+                                        </td>
 
-                                </td>
+                                        <td>
+                                            <?= htmlspecialchars(
+                                                $team['division_name']
+                                            ) ?>
+                                        </td>
 
-                            </tr>
+                                        <td>
+                                            <?= htmlspecialchars(
+                                                $team['smelter_name']
+                                            ) ?>
+                                        </td>
 
-                        <?php endforeach; ?>
+                                        <td>
 
-                    <?php endif; ?>
+                                            <strong>
+                                                <?= htmlspecialchars(
+                                                    $team['name']
+                                                ) ?>
+                                            </strong>
 
-                    </tbody>
+                                        </td>
 
-                </table>
+                                        <td>
+
+                                            <a
+                                                href="<?= htmlspecialchars(
+                                                    $team['link']
+                                                ) ?>"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                class="team-link"
+                                                title="<?= htmlspecialchars(
+                                                    $team['link']
+                                                ) ?>"
+                                            >
+                                                <?= htmlspecialchars(
+                                                    $team['link']
+                                                ) ?>
+                                            </a>
+
+                                        </td>
+
+                                        <td>
+
+                                            <?php if ($team['status'] === 'active'): ?>
+
+                                                <span class="badge bg-success">
+                                                    Aktif
+                                                </span>
+
+                                            <?php else: ?>
+
+                                                <span class="badge bg-secondary">
+                                                    Nonaktif
+                                                </span>
+
+                                            <?php endif; ?>
+
+                                        </td>
+
+                                        <td class="text-end">
+
+                                            <div class="d-flex justify-content-end gap-1">
+
+                                                <a
+                                                    href="teams?edit=<?= (int) $team['id'] ?>"
+                                                    class="btn btn-sm btn-outline-primary"
+                                                >
+                                                    Edit
+                                                </a>
+
+                                                <form
+                                                    method="POST"
+                                                    class="d-inline"
+                                                    onsubmit="return confirm(
+                                                        'Yakin ingin mengubah status team ini?'
+                                                    );"
+                                                >
+
+                                                    <input
+                                                        type="hidden"
+                                                        name="csrf_token"
+                                                        value="<?= htmlspecialchars(
+                                                            $csrfToken
+                                                        ) ?>"
+                                                    >
+
+                                                    <input
+                                                        type="hidden"
+                                                        name="action"
+                                                        value="toggle_status"
+                                                    >
+
+                                                    <input
+                                                        type="hidden"
+                                                        name="team_id"
+                                                        value="<?= (int) $team['id'] ?>"
+                                                    >
+
+                                                    <input
+                                                        type="hidden"
+                                                        name="division_id"
+                                                        value="<?= (int) $team['division_id'] ?>"
+                                                    >
+
+                                                    <input
+                                                        type="hidden"
+                                                        name="smelter_id"
+                                                        value="<?= (int) $team['smelter_id'] ?>"
+                                                    >
+
+                                                    <?php if ($team['status'] === 'active'): ?>
+
+                                                        <button
+                                                            type="submit"
+                                                            class="btn btn-sm btn-outline-danger"
+                                                        >
+                                                            Nonaktifkan
+                                                        </button>
+
+                                                    <?php else: ?>
+
+                                                        <button
+                                                            type="submit"
+                                                            class="btn btn-sm btn-outline-success"
+                                                        >
+                                                            Aktifkan
+                                                        </button>
+
+                                                    <?php endif; ?>
+
+                                                </form>
+
+                                            </div>
+
+                                        </td>
+
+                                    </tr>
+
+                                <?php endforeach; ?>
+
+                            <?php endif; ?>
+
+                            </tbody>
+
+                        </table>
+
+                    </div>
+
+                </div>
 
             </div>
 
-        </div>
+        </main>
 
     </div>
-
 </div>
 
-
 <script>
+document.addEventListener('DOMContentLoaded', function () {
 
-const divisionSelect =
-    document.getElementById('division_id');
+    /*
+    |--------------------------------------------------------------------------
+    | Generic dependent dropdown
+    |--------------------------------------------------------------------------
+    */
+    async function loadSmelters(divisionSelect, smelterSelect) {
 
-const smelterSelect =
-    document.getElementById('smelter_id');
+        const divisionId = divisionSelect.value;
 
+        smelterSelect.innerHTML = '';
 
-divisionSelect.addEventListener(
-    'change',
-    async function () {
+        const defaultOption = document.createElement('option');
+        defaultOption.value = '';
+        defaultOption.textContent = '-- Pilih Smelter --';
 
-        const divisionId = this.value;
-
-        smelterSelect.innerHTML =
-            '<option value="">Memuat Smelter...</option>';
-
-        smelterSelect.disabled = true;
-
+        smelterSelect.appendChild(defaultOption);
 
         if (!divisionId) {
-
-            smelterSelect.innerHTML =
-                '<option value="">-- Pilih Divisi terlebih dahulu --</option>';
-
             return;
         }
-
 
         try {
 
             const response = await fetch(
-                '../api/get-smelters.php?division_id=' +
+                '../api/get-smelters?division_id=' +
                 encodeURIComponent(divisionId)
             );
 
-            const result =
-                await response.json();
-
-
-            if (!result.success) {
-                throw new Error(result.message);
+            if (!response.ok) {
+                throw new Error('Gagal mengambil data smelter.');
             }
 
+            const result = await response.json();
 
-            smelterSelect.innerHTML =
-                '<option value="">-- Pilih Smelter --</option>';
+            // API mengembalikan:
+            // {
+            //     success: true,
+            //     data: [...]
+            // }
 
+            if (!result.success || !Array.isArray(result.data)) {
+                throw new Error(
+                    result.message || 'Format data smelter tidak valid.'
+                );
+            }
 
             result.data.forEach(function (smelter) {
 
-                const option =
-                    document.createElement('option');
+                const option = document.createElement('option');
 
-                option.value =
-                    smelter.id;
-
-                option.textContent =
-                    smelter.name;
+                option.value = smelter.id;
+                option.textContent = smelter.name;
 
                 smelterSelect.appendChild(option);
 
             });
 
-
-            smelterSelect.disabled = false;
-
         } catch (error) {
 
-            smelterSelect.innerHTML =
-                '<option value="">Gagal memuat Smelter</option>';
+            console.error('Error memuat smelter:', error);
 
-            console.error(error);
+            smelterSelect.innerHTML = '';
+
+            const errorOption = document.createElement('option');
+            errorOption.value = '';
+            errorOption.textContent = 'Gagal memuat smelter';
+
+            smelterSelect.appendChild(errorOption);
         }
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Form: Divisi -> Smelter
+    |--------------------------------------------------------------------------
+    */
+    const formDivision = document.getElementById('division_id');
+    const formSmelter  = document.getElementById('smelter_id');
+
+    if (formDivision && formSmelter) {
+
+        formDivision.addEventListener('change', async function () {
+
+            await loadSmelters(
+                formDivision,
+                formSmelter
+            );
+
+        });
 
     }
-);
 
+    /*
+    |--------------------------------------------------------------------------
+    | Filter: Divisi -> Smelter
+    |--------------------------------------------------------------------------
+    */
+    const filterDivision = document.getElementById('filter_division_id');
+    const filterSmelter  = document.getElementById('filter_smelter_id');
+
+    if (filterDivision && filterSmelter) {
+
+        filterDivision.addEventListener('change', async function () {
+
+            const previousValue = filterSmelter.value;
+
+            await loadSmelters(
+                filterDivision,
+                filterSmelter
+            );
+
+            /*
+            | Jika smelter sebelumnya masih tersedia,
+            | pertahankan pilihan tersebut.
+            */
+            const exists = Array.from(
+                filterSmelter.options
+            ).some(function (option) {
+                return option.value === previousValue;
+            });
+
+            if (exists) {
+                filterSmelter.value = previousValue;
+            }
+
+        });
+
+    }
+
+});
 </script>
+
+<script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+></script>
 
 </body>
 </html>
