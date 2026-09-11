@@ -80,6 +80,26 @@ function getTargetUser(PDO $pdo, int $userId): ?array
 }
 
 
+function getTargetUserForUpdate(PDO $pdo, int $userId): ?array
+{
+    $stmt = $pdo->prepare("
+        SELECT
+            u.id, u.nik, u.name, u.email, u.status, u.division_id,
+            u.approved_by, u.approved_at, u.rejected_reason, u.deleted_at,
+            r.id AS role_id, r.name AS role_name, d.name AS division_name
+        FROM users u
+        INNER JOIN roles r ON r.id = u.role_id
+        LEFT JOIN divisions d ON d.id = u.division_id
+        WHERE u.id = ?
+        LIMIT 1
+        FOR UPDATE
+    ");
+    $stmt->execute([$userId]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $user ?: null;
+}
+
+
 function verifyCsrf(): void
 {
     $token = $_POST['csrf_token'] ?? '';
@@ -526,6 +546,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
             $pdo->beginTransaction();
+
+            $user = getTargetUserForUpdate($pdo, (int) $userId);
+            if (!$user) {
+                throw new Exception('User tidak ditemukan.');
+            }
+            if (isAdminRole($user)) {
+                throw new Exception('Akun Admin tidak dapat diproses melalui halaman ini.');
+            }
+            if ($user['status'] !== 'pending') {
+                throw new Exception('User ini sudah tidak berstatus pending.');
+            }
 
 
             /*
@@ -1116,8 +1147,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
             }
 
+            if (mb_strlen($reason) > 1000) {
+                throw new Exception(
+                    'Alasan penolakan maksimal 1000 karakter.'
+                );
+            }
+
 
             $pdo->beginTransaction();
+
+            $user = getTargetUserForUpdate($pdo, (int) $userId);
+            if (!$user) {
+                throw new Exception('User tidak ditemukan.');
+            }
+            if (isAdminRole($user)) {
+                throw new Exception('Akun Admin tidak dapat diproses melalui halaman ini.');
+            }
+            if ($user['status'] !== 'pending') {
+                throw new Exception('Hanya user pending yang dapat ditolak.');
+            }
 
 
             /*
@@ -1184,6 +1232,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $userId
             ]);
 
+            if ($stmt->rowCount() !== 1) {
+                throw new Exception('Status user gagal diubah menjadi rejected.');
+            }
+
 
             /*
             |--------------------------------------------------------------------------
@@ -1209,6 +1261,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['user_id'],
                 $accessRequest['id']
             ]);
+
+            if ($stmt->rowCount() !== 1) {
+                throw new Exception('Request gagal diubah menjadi rejected.');
+            }
 
 
             /*
@@ -1280,8 +1336,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
             }
 
+            if (mb_strlen($reason) > 1000) {
+                throw new Exception(
+                    'Alasan suspend maksimal 1000 karakter.'
+                );
+            }
+
 
             $pdo->beginTransaction();
+
+            $user = getTargetUserForUpdate($pdo, (int) $userId);
+            if (!$user) {
+                throw new Exception('User tidak ditemukan.');
+            }
+            if (isAdminRole($user)) {
+                throw new Exception('Akun Admin tidak dapat diproses melalui halaman ini.');
+            }
+            if (isCurrentUser($user)) {
+                throw new Exception('Anda tidak dapat menonaktifkan akun sendiri.');
+            }
+            if ($user['status'] !== 'active') {
+                throw new Exception('Hanya user active yang dapat di-suspend.');
+            }
 
 
             /*
@@ -1304,6 +1380,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute([
                 $userId
             ]);
+
+            if ($stmt->rowCount() !== 1) {
+                throw new Exception('User gagal di-suspend atau status sudah berubah.');
+            }
 
 
             /*
@@ -1390,6 +1470,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $pdo->beginTransaction();
 
+            $user = getTargetUserForUpdate($pdo, (int) $userId);
+            if (!$user) {
+                throw new Exception('User tidak ditemukan.');
+            }
+            if (isAdminRole($user)) {
+                throw new Exception('Akun Admin tidak dapat diproses melalui halaman ini.');
+            }
+            if ($user['status'] !== 'suspended') {
+                throw new Exception('Hanya user suspended yang dapat diaktifkan kembali.');
+            }
+
 
             /*
             |--------------------------------------------------------------------------
@@ -1411,6 +1502,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute([
                 $userId
             ]);
+
+            if ($stmt->rowCount() !== 1) {
+                throw new Exception('User gagal diaktifkan atau status sudah berubah.');
+            }
 
 
             /*
@@ -1494,8 +1589,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
             }
 
+            if (mb_strlen($reason) > 1000) {
+                throw new Exception(
+                    'Alasan penghapusan maksimal 1000 karakter.'
+                );
+            }
+
 
             $pdo->beginTransaction();
+
+            $user = getTargetUserForUpdate($pdo, (int) $userId);
+            if (!$user) {
+                throw new Exception('User tidak ditemukan.');
+            }
+            if (isAdminRole($user)) {
+                throw new Exception('Akun Admin tidak dapat diproses melalui halaman ini.');
+            }
+            if (isCurrentUser($user)) {
+                throw new Exception('Anda tidak dapat menghapus akun sendiri.');
+            }
+            if ($user['status'] === 'deleted') {
+                throw new Exception('User sudah berstatus deleted.');
+            }
 
 
             /*
@@ -3320,6 +3435,7 @@ function roleBadge(string $role): string
                             name="rejected_reason"
                             class="form-control"
                             rows="4"
+                            maxlength="1000"
                             required
                         ></textarea>
 
@@ -3455,6 +3571,7 @@ function roleBadge(string $role): string
                             name="reason"
                             class="form-control"
                             rows="4"
+                            maxlength="1000"
                             required
                         ></textarea>
 
@@ -3592,6 +3709,7 @@ function roleBadge(string $role): string
                             name="reason"
                             class="form-control"
                             rows="4"
+                            maxlength="1000"
                             required
                         ></textarea>
 

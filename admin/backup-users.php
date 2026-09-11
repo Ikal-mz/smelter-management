@@ -3,6 +3,22 @@
 require_once __DIR__ . '/../middleware/admin.php';
 require_once __DIR__ . '/../config/database.php';
 
+/*
+|--------------------------------------------------------------------------
+| SESSION & CSRF TOKEN
+|--------------------------------------------------------------------------
+*/
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+$csrfToken = $_SESSION['csrf_token'];
+
 $error = '';
 $success = '';
 
@@ -16,323 +32,182 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $action = $_POST['action'] ?? '';
 
-    $userId = filter_input(
-        INPUT_POST,
-        'user_id',
-        FILTER_VALIDATE_INT
-    );
+    /*
+    |--------------------------------------------------------------------------
+    | VALIDASI CSRF
+    |--------------------------------------------------------------------------
+    */
 
-    if (!$userId) {
+    $token = $_POST['csrf_token'] ?? '';
 
-        $error = 'User tidak valid.';
+    if (
+        empty($_SESSION['csrf_token'])
+        || empty($token)
+        || !hash_equals($_SESSION['csrf_token'], $token)
+    ) {
 
-    } elseif (!in_array($action, ['approve', 'reject'], true)) {
-
-        $error = 'Action tidak valid.';
+        $error = 'Request tidak valid. Silakan muat ulang halaman.';
 
     } else {
 
-        try {
+        $userId = filter_input(
+            INPUT_POST,
+            'user_id',
+            FILTER_VALIDATE_INT
+        );
 
-            $pdo->beginTransaction();
+        if (!$userId) {
 
-            /*
-            |--------------------------------------------------------------------------
-            | Ambil data user
-            |--------------------------------------------------------------------------
-            */
+            $error = 'User tidak valid.';
 
-            $stmt = $pdo->prepare("
-                SELECT
-                    u.id,
-                    u.nik,
-                    u.name,
-                    u.email,
-                    u.status,
-                    u.division_id,
-                    r.id AS role_id,
-                    r.name AS role_name
-                FROM users u
-                INNER JOIN roles r
-                    ON r.id = u.role_id
-                WHERE u.id = ?
-                LIMIT 1
-            ");
+        } elseif (!in_array($action, ['approve', 'reject'], true)) {
 
-            $stmt->execute([$userId]);
+            $error = 'Action tidak valid.';
 
-            $user = $stmt->fetch();
+        } else {
 
-            if (!$user) {
-                throw new Exception('User tidak ditemukan.');
-            }
+            try {
 
-            /*
-            |--------------------------------------------------------------------------
-            | Hanya pending yang dapat diproses
-            |--------------------------------------------------------------------------
-            */
+                $pdo->beginTransaction();
 
-            if ($user['status'] !== 'pending') {
-                throw new Exception(
-                    'User ini sudah tidak berstatus pending.'
-                );
-            }
+                /*
+                |--------------------------------------------------------------------------
+                | Ambil data user
+                |--------------------------------------------------------------------------
+                */
 
+                $stmt = $pdo->prepare("
+                    SELECT
+                        u.id,
+                        u.nik,
+                        u.name,
+                        u.email,
+                        u.status,
+                        u.division_id,
+                        r.id AS role_id,
+                        r.name AS role_name
+                    FROM users u
+                    INNER JOIN roles r
+                        ON r.id = u.role_id
+                    WHERE u.id = ?
+                    LIMIT 1
+                ");
 
-            /*
-            |--------------------------------------------------------------------------
-            | Ambil request awal user
-            |--------------------------------------------------------------------------
-            */
+                $stmt->execute([$userId]);
 
-            $stmt = $pdo->prepare("
-                SELECT
-                    ar.id,
-                    ar.smelter_id,
-                    ar.team_id,
-                    ar.request_type,
-                    ar.status,
-                    s.name AS smelter_name
-                FROM access_requests ar
-                INNER JOIN smelters s
-                    ON s.id = ar.smelter_id
-                WHERE ar.user_id = ?
-                  AND ar.status = 'pending'
-                ORDER BY ar.id ASC
-                LIMIT 1
-            ");
+                $user = $stmt->fetch();
 
-            $stmt->execute([$userId]);
-
-            $accessRequest = $stmt->fetch();
-
-            if (!$accessRequest) {
-                throw new Exception(
-                    'Request akses awal user tidak ditemukan.'
-                );
-            }
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | REJECT
-            |--------------------------------------------------------------------------
-            */
-
-            if ($action === 'reject') {
-
-                $reason = trim(
-                    $_POST['rejected_reason'] ?? ''
-                );
-
-                if ($reason === '') {
+                if (!$user) {
                     throw new Exception(
-                        'Alasan penolakan wajib diisi.'
+                        'User tidak ditemukan.'
                     );
                 }
 
-
-                /*
-                | Update user
-                */
-
-                $stmt = $pdo->prepare("
-                    UPDATE users
-                    SET
-                        status = 'rejected',
-                        rejected_reason = ?,
-                        approved_by = ?,
-                        approved_at = NULL
-                    WHERE id = ?
-                ");
-
-                $stmt->execute([
-                    $reason,
-                    $_SESSION['user_id'],
-                    $userId
-                ]);
-
-
-                /*
-                | Update access request
-                */
-
-                $stmt = $pdo->prepare("
-                    UPDATE access_requests
-                    SET
-                        status = 'rejected',
-                        rejected_reason = ?,
-                        approved_by = ?,
-                        approved_at = NULL
-                    WHERE id = ?
-                ");
-
-                $stmt->execute([
-                    $reason,
-                    $_SESSION['user_id'],
-                    $accessRequest['id']
-                ]);
-
-
-                /*
-                | Simpan approval history
-                */
-
-                $stmt = $pdo->prepare("
-                    INSERT INTO user_approvals (
-                        user_id,
-                        approved_by,
-                        action,
-                        notes
-                    )
-                    VALUES (?, ?, 'rejected', ?)
-                ");
-
-                $stmt->execute([
-                    $userId,
-                    $_SESSION['user_id'],
-                    $reason
-                ]);
-
-
-                $pdo->commit();
-
-                $success =
-                    'User berhasil ditolak.';
-
-            }
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | APPROVE
-            |--------------------------------------------------------------------------
-            */
-
-            if ($action === 'approve') {
-
                 /*
                 |--------------------------------------------------------------------------
-                | SPV
-                |--------------------------------------------------------------------------
-                |
-                | SPV dapat langsung disetujui Admin.
-                |
-                | Setelah approve:
-                |
-                | users.status = active
-                |
-                | user_access:
-                |   smelter_id = smelter awal
-                |   team_id    = NULL
+                | Hanya pending yang dapat diproses
                 |--------------------------------------------------------------------------
                 */
 
-                if ($user['role_name'] === 'spv') {
+                if ($user['status'] !== 'pending') {
+                    throw new Exception(
+                        'User ini sudah tidak berstatus pending.'
+                    );
+                }
 
+                /*
+                |--------------------------------------------------------------------------
+                | Ambil request awal user
+                |--------------------------------------------------------------------------
+                */
 
-                    if (
-                        $accessRequest['request_type']
-                        !== 'additional_smelter'
-                    ) {
+                $stmt = $pdo->prepare("
+                    SELECT
+                        ar.id,
+                        ar.smelter_id,
+                        ar.team_id,
+                        ar.request_type,
+                        ar.status,
+                        s.name AS smelter_name
+                    FROM access_requests ar
+                    INNER JOIN smelters s
+                        ON s.id = ar.smelter_id
+                    WHERE ar.user_id = ?
+                      AND ar.status = 'pending'
+                    ORDER BY ar.id ASC
+                    LIMIT 1
+                ");
 
+                $stmt->execute([$userId]);
+
+                $accessRequest = $stmt->fetch();
+
+                if (!$accessRequest) {
+                    throw new Exception(
+                        'Request akses awal user tidak ditemukan.'
+                    );
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | REJECT
+                |--------------------------------------------------------------------------
+                */
+
+                if ($action === 'reject') {
+
+                    $reason = trim(
+                        $_POST['rejected_reason'] ?? ''
+                    );
+
+                    if ($reason === '') {
                         throw new Exception(
-                            'Request akses SPV tidak valid.'
+                            'Alasan penolakan wajib diisi.'
                         );
                     }
 
-
                     /*
-                    | Pastikan belum punya akses ke smelter tersebut
-                    */
-
-                    $stmt = $pdo->prepare("
-                        SELECT id
-                        FROM user_access
-                        WHERE user_id = ?
-                          AND smelter_id = ?
-                          AND team_id IS NULL
-                        LIMIT 1
-                    ");
-
-                    $stmt->execute([
-                        $userId,
-                        $accessRequest['smelter_id']
-                    ]);
-
-                    if ($stmt->fetch()) {
-
-                        throw new Exception(
-                            'Akses Smelter sudah tersedia.'
-                        );
-                    }
-
-
-                    /*
-                    | Aktifkan User
+                    | Update user
                     */
 
                     $stmt = $pdo->prepare("
                         UPDATE users
                         SET
-                            status = 'active',
+                            status = 'rejected',
+                            rejected_reason = ?,
                             approved_by = ?,
-                            approved_at = NOW(),
-                            rejected_reason = NULL
+                            approved_at = NULL
                         WHERE id = ?
                     ");
 
                     $stmt->execute([
+                        $reason,
                         $_SESSION['user_id'],
                         $userId
                     ]);
 
-
                     /*
-                    | Buat akses Smelter
-                    */
-
-                    $stmt = $pdo->prepare("
-                        INSERT INTO user_access (
-                            user_id,
-                            smelter_id,
-                            team_id,
-                            status,
-                            granted_by,
-                            granted_at
-                        )
-                        VALUES (?, ?, NULL, 'active', ?, NOW())
-                    ");
-
-                    $stmt->execute([
-                        $userId,
-                        $accessRequest['smelter_id'],
-                        $_SESSION['user_id']
-                    ]);
-
-
-                    /*
-                    | Update Request
+                    | Update access request
                     */
 
                     $stmt = $pdo->prepare("
                         UPDATE access_requests
                         SET
-                            status = 'approved',
+                            status = 'rejected',
+                            rejected_reason = ?,
                             approved_by = ?,
-                            approved_at = NOW()
+                            approved_at = NULL
                         WHERE id = ?
                     ");
 
                     $stmt->execute([
+                        $reason,
                         $_SESSION['user_id'],
                         $accessRequest['id']
                     ]);
 
-
                     /*
-                    | Approval History
+                    | Simpan approval history
                     */
 
                     $stmt = $pdo->prepare("
@@ -342,207 +217,344 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             action,
                             notes
                         )
-                        VALUES (?, ?, 'approved', ?)
+                        VALUES (?, ?, 'rejected', ?)
                     ");
 
                     $stmt->execute([
                         $userId,
                         $_SESSION['user_id'],
-                        'SPV disetujui oleh Admin.'
+                        $reason
                     ]);
-
 
                     $pdo->commit();
 
                     $success =
-                        'SPV berhasil disetujui dan akses Smelter telah diberikan.';
+                        'User berhasil ditolak.';
                 }
-
 
                 /*
                 |--------------------------------------------------------------------------
-                | FOREMAN
-                |--------------------------------------------------------------------------
-                |
-                | Admin hanya boleh approve Foreman apabila tidak ada
-                | SPV aktif yang mengontrol Smelter tersebut.
+                | APPROVE
                 |--------------------------------------------------------------------------
                 */
 
-                elseif ($user['role_name'] === 'foreman') {
-
-
-                    if (
-                        $accessRequest['request_type']
-                        !== 'additional_team'
-                    ) {
-
-                        throw new Exception(
-                            'Request akses Foreman tidak valid.'
-                        );
-                    }
-
+                if ($action === 'approve') {
 
                     /*
                     |--------------------------------------------------------------------------
-                    | Cari SPV aktif pada Smelter tersebut
-                    |--------------------------------------------------------------------------
-                    */
-
-                    $stmt = $pdo->prepare("
-                        SELECT
-                            u.id,
-                            u.name
-                        FROM users u
-                        INNER JOIN roles r
-                            ON r.id = u.role_id
-                        INNER JOIN user_access ua
-                            ON ua.user_id = u.id
-                        WHERE r.name = 'spv'
-                          AND u.status = 'active'
-                          AND u.division_id = ?
-                          AND ua.smelter_id = ?
-                          AND ua.team_id IS NULL
-                          AND ua.status = 'active'
-                        LIMIT 1
-                    ");
-
-                    $stmt->execute([
-                        $user['division_id'],
-                        $accessRequest['smelter_id']
-                    ]);
-
-                    $spv = $stmt->fetch();
-
-
-                    if ($spv) {
-
-                        /*
-                        | Jangan izinkan Admin approve.
-                        | Request akan ditangani oleh SPV.
-                        */
-
-                        throw new Exception(
-                            'Smelter ini memiliki SPV aktif. Foreman harus disetujui oleh SPV.'
-                        );
-                    }
-
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Tidak ada SPV
+                    | SPV
                     |--------------------------------------------------------------------------
                     |
-                    | Admin menjadi approver.
+                    | SPV dapat langsung disetujui Admin.
+                    |
+                    | Setelah approve:
+                    |
+                    | users.status = active
+                    |
+                    | user_access:
+                    |   smelter_id = smelter awal
+                    |   team_id    = NULL
                     |--------------------------------------------------------------------------
                     */
 
+                    if ($user['role_name'] === 'spv') {
+
+                        if (
+                            $accessRequest['request_type']
+                            !== 'additional_smelter'
+                        ) {
+
+                            throw new Exception(
+                                'Request akses SPV tidak valid.'
+                            );
+                        }
+
+                        /*
+                        | Pastikan belum punya akses ke smelter tersebut
+                        */
+
+                        $stmt = $pdo->prepare("
+                            SELECT id
+                            FROM user_access
+                            WHERE user_id = ?
+                              AND smelter_id = ?
+                              AND team_id IS NULL
+                            LIMIT 1
+                        ");
+
+                        $stmt->execute([
+                            $userId,
+                            $accessRequest['smelter_id']
+                        ]);
+
+                        if ($stmt->fetch()) {
+
+                            throw new Exception(
+                                'Akses Smelter sudah tersedia.'
+                            );
+                        }
+
+                        /*
+                        | Aktifkan User
+                        */
+
+                        $stmt = $pdo->prepare("
+                            UPDATE users
+                            SET
+                                status = 'active',
+                                approved_by = ?,
+                                approved_at = NOW(),
+                                rejected_reason = NULL
+                            WHERE id = ?
+                        ");
+
+                        $stmt->execute([
+                            $_SESSION['user_id'],
+                            $userId
+                        ]);
+
+                        /*
+                        | Buat akses Smelter
+                        */
+
+                        $stmt = $pdo->prepare("
+                            INSERT INTO user_access (
+                                user_id,
+                                smelter_id,
+                                team_id,
+                                status,
+                                granted_by,
+                                granted_at
+                            )
+                            VALUES (?, ?, NULL, 'active', ?, NOW())
+                        ");
+
+                        $stmt->execute([
+                            $userId,
+                            $accessRequest['smelter_id'],
+                            $_SESSION['user_id']
+                        ]);
+
+                        /*
+                        | Update Request
+                        */
+
+                        $stmt = $pdo->prepare("
+                            UPDATE access_requests
+                            SET
+                                status = 'approved',
+                                approved_by = ?,
+                                approved_at = NOW()
+                            WHERE id = ?
+                        ");
+
+                        $stmt->execute([
+                            $_SESSION['user_id'],
+                            $accessRequest['id']
+                        ]);
+
+                        /*
+                        | Approval History
+                        */
+
+                        $stmt = $pdo->prepare("
+                            INSERT INTO user_approvals (
+                                user_id,
+                                approved_by,
+                                action,
+                                notes
+                            )
+                            VALUES (?, ?, 'approved', ?)
+                        ");
+
+                        $stmt->execute([
+                            $userId,
+                            $_SESSION['user_id'],
+                            'SPV disetujui oleh Admin.'
+                        ]);
+
+                        $pdo->commit();
+
+                        $success =
+                            'SPV berhasil disetujui dan akses Smelter telah diberikan.';
+                    }
 
                     /*
-                    | Aktifkan user
+                    |--------------------------------------------------------------------------
+                    | FOREMAN
+                    |--------------------------------------------------------------------------
+                    |
+                    | Admin hanya boleh approve Foreman apabila tidak ada
+                    | SPV aktif yang mengontrol Smelter tersebut.
+                    |--------------------------------------------------------------------------
                     */
 
-                    $stmt = $pdo->prepare("
-                        UPDATE users
-                        SET
-                            status = 'active',
-                            approved_by = ?,
-                            approved_at = NOW(),
-                            rejected_reason = NULL
-                        WHERE id = ?
-                    ");
+                    elseif ($user['role_name'] === 'foreman') {
 
-                    $stmt->execute([
-                        $_SESSION['user_id'],
-                        $userId
-                    ]);
+                        if (
+                            $accessRequest['request_type']
+                            !== 'additional_team'
+                        ) {
 
+                            throw new Exception(
+                                'Request akses Foreman tidak valid.'
+                            );
+                        }
 
-                    /*
-                    | Buat akses Team
-                    */
+                        /*
+                        |--------------------------------------------------------------------------
+                        | Cari SPV aktif pada Smelter tersebut
+                        |--------------------------------------------------------------------------
+                        */
 
-                    $stmt = $pdo->prepare("
-                        INSERT INTO user_access (
-                            user_id,
-                            smelter_id,
-                            team_id,
-                            status,
-                            granted_by,
-                            granted_at
-                        )
-                        VALUES (?, ?, ?, 'active', ?, NOW())
-                    ");
+                        $stmt = $pdo->prepare("
+                            SELECT
+                                u.id,
+                                u.name
+                            FROM users u
+                            INNER JOIN roles r
+                                ON r.id = u.role_id
+                            INNER JOIN user_access ua
+                                ON ua.user_id = u.id
+                            WHERE r.name = 'spv'
+                              AND u.status = 'active'
+                              AND u.division_id = ?
+                              AND ua.smelter_id = ?
+                              AND ua.team_id IS NULL
+                              AND ua.status = 'active'
+                            LIMIT 1
+                        ");
 
-                    $stmt->execute([
-                        $userId,
-                        $accessRequest['smelter_id'],
-                        $accessRequest['team_id'],
-                        $_SESSION['user_id']
-                    ]);
+                        $stmt->execute([
+                            $user['division_id'],
+                            $accessRequest['smelter_id']
+                        ]);
 
+                        $spv = $stmt->fetch();
 
-                    /*
-                    | Update request
-                    */
+                        if ($spv) {
 
-                    $stmt = $pdo->prepare("
-                        UPDATE access_requests
-                        SET
-                            status = 'approved',
-                            approved_by = ?,
-                            approved_at = NOW()
-                        WHERE id = ?
-                    ");
+                            /*
+                            | Jangan izinkan Admin approve.
+                            | Request akan ditangani oleh SPV.
+                            */
 
-                    $stmt->execute([
-                        $_SESSION['user_id'],
-                        $accessRequest['id']
-                    ]);
+                            throw new Exception(
+                                'Smelter ini memiliki SPV aktif. Foreman harus disetujui oleh SPV.'
+                            );
+                        }
 
+                        /*
+                        |--------------------------------------------------------------------------
+                        | Tidak ada SPV
+                        |--------------------------------------------------------------------------
+                        |
+                        | Admin menjadi approver.
+                        |--------------------------------------------------------------------------
+                        */
 
-                    /*
-                    | Approval history
-                    */
+                        /*
+                        | Aktifkan user
+                        */
 
-                    $stmt = $pdo->prepare("
-                        INSERT INTO user_approvals (
-                            user_id,
-                            approved_by,
-                            action,
-                            notes
-                        )
-                        VALUES (?, ?, 'approved', ?)
-                    ");
+                        $stmt = $pdo->prepare("
+                            UPDATE users
+                            SET
+                                status = 'active',
+                                approved_by = ?,
+                                approved_at = NOW(),
+                                rejected_reason = NULL
+                            WHERE id = ?
+                        ");
 
-                    $stmt->execute([
-                        $userId,
-                        $_SESSION['user_id'],
-                        'Foreman disetujui Admin karena belum terdapat SPV aktif pada Smelter.'
-                    ]);
+                        $stmt->execute([
+                            $_SESSION['user_id'],
+                            $userId
+                        ]);
 
+                        /*
+                        | Buat akses Team
+                        */
 
-                    $pdo->commit();
+                        $stmt = $pdo->prepare("
+                            INSERT INTO user_access (
+                                user_id,
+                                smelter_id,
+                                team_id,
+                                status,
+                                granted_by,
+                                granted_at
+                            )
+                            VALUES (?, ?, ?, 'active', ?, NOW())
+                        ");
 
-                    $success =
-                        'Foreman berhasil disetujui dan akses Team telah diberikan.';
+                        $stmt->execute([
+                            $userId,
+                            $accessRequest['smelter_id'],
+                            $accessRequest['team_id'],
+                            $_SESSION['user_id']
+                        ]);
+
+                        /*
+                        | Update request
+                        */
+
+                        $stmt = $pdo->prepare("
+                            UPDATE access_requests
+                            SET
+                                status = 'approved',
+                                approved_by = ?,
+                                approved_at = NOW()
+                            WHERE id = ?
+                        ");
+
+                        $stmt->execute([
+                            $_SESSION['user_id'],
+                            $accessRequest['id']
+                        ]);
+
+                        /*
+                        | Approval history
+                        */
+
+                        $stmt = $pdo->prepare("
+                            INSERT INTO user_approvals (
+                                user_id,
+                                approved_by,
+                                action,
+                                notes
+                            )
+                            VALUES (?, ?, 'approved', ?)
+                        ");
+
+                        $stmt->execute([
+                            $userId,
+                            $_SESSION['user_id'],
+                            'Foreman disetujui Admin karena belum terdapat SPV aktif pada Smelter.'
+                        ]);
+
+                        $pdo->commit();
+
+                        $success =
+                            'Foreman berhasil disetujui dan akses Team telah diberikan.';
+                    }
+
+                    else {
+
+                        throw new Exception(
+                            'Role user tidak dapat diproses.'
+                        );
+                    }
                 }
 
-                else {
+            } catch (Throwable $e) {
 
-                    throw new Exception(
-                        'Role user tidak dapat diproses.'
-                    );
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
                 }
+
+                $error = $e->getMessage();
             }
-
-        } catch (Throwable $e) {
-
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-
-            $error = $e->getMessage();
         }
     }
 }
@@ -904,13 +916,23 @@ $pendingUsers = $stmt->fetchAll();
                                         );
                                     ?>
 
-
                                     <?php if ($canAdminApprove): ?>
 
                                         <form
                                             method="POST"
                                             class="d-inline"
                                         >
+
+                                            <!-- CSRF -->
+                                            <input
+                                                type="hidden"
+                                                name="csrf_token"
+                                                value="<?= htmlspecialchars(
+                                                    $csrfToken,
+                                                    ENT_QUOTES,
+                                                    'UTF-8'
+                                                ) ?>"
+                                            >
 
                                             <input
                                                 type="hidden"
@@ -921,7 +943,7 @@ $pendingUsers = $stmt->fetchAll();
                                             <input
                                                 type="hidden"
                                                 name="user_id"
-                                                value="<?= $user['id'] ?>"
+                                                value="<?= (int) $user['id'] ?>"
                                             >
 
                                             <button
@@ -948,10 +970,11 @@ $pendingUsers = $stmt->fetchAll();
                                         class="btn btn-sm btn-danger"
                                         data-bs-toggle="modal"
                                         data-bs-target="#rejectModal"
-                                        data-user-id="<?= $user['id'] ?>"
+                                        data-user-id="<?= (int) $user['id'] ?>"
                                         data-user-name="<?= htmlspecialchars(
                                             $user['name'],
-                                            ENT_QUOTES
+                                            ENT_QUOTES,
+                                            'UTF-8'
                                         ) ?>"
                                     >
                                         Reject
@@ -994,6 +1017,17 @@ $pendingUsers = $stmt->fetchAll();
 
             <form method="POST">
 
+                <!-- CSRF -->
+                <input
+                    type="hidden"
+                    name="csrf_token"
+                    value="<?= htmlspecialchars(
+                        $csrfToken,
+                        ENT_QUOTES,
+                        'UTF-8'
+                    ) ?>"
+                >
+
                 <div class="modal-header">
 
                     <h5 class="modal-title">
@@ -1027,7 +1061,6 @@ $pendingUsers = $stmt->fetchAll();
                     </p>
 
                     <strong id="reject_user_name"></strong>
-
 
                     <div class="mt-3">
 
@@ -1078,41 +1111,6 @@ $pendingUsers = $stmt->fetchAll();
     src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
 ></script>
 
-
-<script>
-
-const rejectModal =
-    document.getElementById('rejectModal');
-
-
-rejectModal.addEventListener(
-    'show.bs.modal',
-    function (event) {
-
-        const button =
-            event.relatedTarget;
-
-        const userId =
-            button.getAttribute('data-user-id');
-
-        const userName =
-            button.getAttribute('data-user-name');
-
-
-        document.getElementById(
-            'reject_user_id'
-        ).value = userId;
-
-
-        document.getElementById(
-            'reject_user_name'
-        ).textContent = userName;
-
-    }
-);
-
-</script>
-
-
 </body>
+
 </html>

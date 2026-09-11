@@ -2,12 +2,11 @@
 
 require_once __DIR__ . '/auth.php';
 
-
 if (
-    !isset($_SESSION['role']) ||
-    $_SESSION['role'] !== 'admin'
+    !isset($_SESSION['user_id']) ||
+    ($_SESSION['role'] ?? '') !== 'admin' ||
+    ($_SESSION['status'] ?? '') !== 'active'
 ) {
-
     http_response_code(403);
 
     die('

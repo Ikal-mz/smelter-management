@@ -1,7 +1,10 @@
+Options -Indexes
+
 RewriteEngine On
 
 # Project berada di /smelter-management/
 RewriteBase /smelter-management/
+
 
 # =========================================================
 # BLOK AKSES FILE / FOLDER SENSITIF
@@ -16,17 +19,20 @@ RewriteRule ^config(?:/|$) - [F,L,NC]
 # Blok folder middleware
 RewriteRule ^middleware(?:/|$) - [F,L,NC]
 
-# Blok file dokumentasi / credential
-RewriteRule ^(?:Readme|userDibuat)\.txt$ - [F,L,NC]
+
+# Blok file environment / credential umum jika ada
+RewriteRule ^(?:\.env|\.env\..*)$ - [F,L,NC]
 
 
 # =========================================================
 # 1. REDIRECT URL .PHP KE CLEAN URL
 # =========================================================
+#
 # Contoh:
 # /auth/login.php
 # menjadi:
 # /auth/login
+#
 
 RewriteCond %{THE_REQUEST} \s/+smelter-management/(.+?)\.php(?:[\s?]|$) [NC]
 RewriteRule ^(.+)\.php$ /smelter-management/$1 [R=301,L,NE]
@@ -44,10 +50,12 @@ RewriteRule ^ - [L]
 # =========================================================
 # 3. CLEAN URL -> FILE PHP
 # =========================================================
+#
 # Contoh:
 # /auth/login
 # akan menjalankan:
 # /auth/login.php
+#
 
 RewriteCond %{DOCUMENT_ROOT}/smelter-management/$1.php -f
 RewriteRule ^(.+?)/?$ $1.php [L,QSA]

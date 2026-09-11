@@ -5,6 +5,18 @@ require_once __DIR__ . '/../middleware/admin.php';
 
 $adminId = (int) $_SESSION['user_id'];
 
+/*
+|--------------------------------------------------------------------------
+| CSRF TOKEN
+|--------------------------------------------------------------------------
+*/
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+$csrfToken = $_SESSION['csrf_token'];
+
 $error = '';
 $success = '';
 
@@ -16,859 +28,1028 @@ $success = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    $action = $_POST['action'] ?? '';
-    $requestId = (int) ($_POST['request_id'] ?? 0);
-    $reason = trim($_POST['reason'] ?? '');
+    /*
+    |--------------------------------------------------------------------------
+    | VALIDATE CSRF
+    |--------------------------------------------------------------------------
+    */
 
-    if (!$requestId) {
-        $error = 'Request tidak valid.';
+    $token = $_POST['csrf_token'] ?? '';
+
+    if (
+        empty($_SESSION['csrf_token'])
+        || empty($token)
+        || !is_string($token)
+        || !hash_equals($_SESSION['csrf_token'], $token)
+    ) {
+
+        $error = 'Request tidak valid. Silakan muat ulang halaman.';
+
     } else {
 
-        try {
+        $action = $_POST['action'] ?? '';
+        $requestId = (int) ($_POST['request_id'] ?? 0);
+        $reason = trim($_POST['reason'] ?? '');
 
-            /*
-            |--------------------------------------------------------------------------
-            | APPROVE ADDITIONAL SMELTER
-            |--------------------------------------------------------------------------
-            */
+        if (!$requestId) {
 
-            if ($action === 'approve_smelter') {
+            $error = 'Request tidak valid.';
 
-                $pdo->beginTransaction();
+        } else {
 
-                /*
-                |--------------------------------------------------------------------------
-                | Ambil request + user + smelter
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    SELECT
-                        ar.id,
-                        ar.user_id,
-                        ar.smelter_id,
-                        ar.team_id,
-                        ar.request_type,
-                        ar.status,
-
-                        u.nik,
-                        u.name AS user_name,
-                        u.status AS user_status,
-                        u.division_id AS user_division_id,
-
-                        r.name AS role_name,
-
-                        s.name AS smelter_name,
-                        s.division_id AS smelter_division_id,
-                        s.status AS smelter_status
-
-                    FROM access_requests ar
-
-                    INNER JOIN users u
-                        ON u.id = ar.user_id
-
-                    INNER JOIN roles r
-                        ON r.id = u.role_id
-
-                    INNER JOIN smelters s
-                        ON s.id = ar.smelter_id
-
-                    WHERE ar.id = ?
-
-                    LIMIT 1
-                ");
-
-                $stmt->execute([
-                    $requestId
-                ]);
-
-                $request = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                if (!$request) {
-                    throw new Exception(
-                        'Request tidak ditemukan.'
-                    );
-                }
+            try {
 
                 /*
                 |--------------------------------------------------------------------------
-                | Validasi request
+                | APPROVE ADDITIONAL SMELTER
                 |--------------------------------------------------------------------------
                 */
 
-                if ($request['request_type'] !== 'additional_smelter') {
-                    throw new Exception(
-                        'Request bukan permintaan Smelter tambahan.'
-                    );
+                if ($action === 'approve_smelter') {
+
+                    $pdo->beginTransaction();
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Ambil request + user + smelter
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        SELECT
+                            ar.id,
+                            ar.user_id,
+                            ar.smelter_id,
+                            ar.team_id,
+                            ar.request_type,
+                            ar.status,
+
+                            u.nik,
+                            u.name AS user_name,
+                            u.status AS user_status,
+                            u.division_id AS user_division_id,
+
+                            r.name AS role_name,
+
+                            s.name AS smelter_name,
+                            s.division_id AS smelter_division_id,
+                            s.status AS smelter_status
+
+                        FROM access_requests ar
+
+                        INNER JOIN users u
+                            ON u.id = ar.user_id
+
+                        INNER JOIN roles r
+                            ON r.id = u.role_id
+
+                        INNER JOIN smelters s
+                            ON s.id = ar.smelter_id
+
+                        WHERE ar.id = ?
+
+                        LIMIT 1
+                    ");
+
+                    $stmt->execute([
+                        $requestId
+                    ]);
+
+                    $request = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$request) {
+                        throw new Exception(
+                            'Request tidak ditemukan.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Validasi request
+                    |--------------------------------------------------------------------------
+                    */
+
+                    if ($request['request_type'] !== 'additional_smelter') {
+                        throw new Exception(
+                            'Request bukan permintaan Smelter tambahan.'
+                        );
+                    }
+
+                    if ($request['status'] !== 'pending') {
+                        throw new Exception(
+                            'Request sudah diproses.'
+                        );
+                    }
+
+                    if ($request['role_name'] !== 'spv') {
+                        throw new Exception(
+                            'Hanya SPV yang dapat memiliki akses Smelter.'
+                        );
+                    }
+
+                    if ($request['user_status'] !== 'active') {
+                        throw new Exception(
+                            'Akun SPV belum aktif.'
+                        );
+                    }
+
+                    if ($request['smelter_status'] !== 'active') {
+                        throw new Exception(
+                            'Smelter tidak aktif.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Pastikan divisi SPV sama dengan divisi Smelter
+                    |--------------------------------------------------------------------------
+                    */
+
+                    if (
+                        (int) $request['user_division_id']
+                        !==
+                        (int) $request['smelter_division_id']
+                    ) {
+
+                        throw new Exception(
+                            'Smelter berada di divisi yang berbeda dengan SPV.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Cek apakah SPV sudah memiliki akses
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        SELECT id
+                        FROM user_access
+                        WHERE user_id = ?
+                          AND smelter_id = ?
+                          AND team_id IS NULL
+                          AND status = 'active'
+                        LIMIT 1
+                    ");
+
+                    $stmt->execute([
+                        $request['user_id'],
+                        $request['smelter_id']
+                    ]);
+
+                    if ($stmt->fetchColumn()) {
+
+                        throw new Exception(
+                            'SPV sudah memiliki akses ke Smelter tersebut.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Berikan akses Smelter
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        INSERT INTO user_access (
+                            user_id,
+                            smelter_id,
+                            team_id,
+                            status,
+                            granted_by,
+                            granted_at,
+                            created_at
+                        )
+                        VALUES (
+                            ?,
+                            ?,
+                            NULL,
+                            'active',
+                            ?,
+                            NOW(),
+                            NOW()
+                        )
+                    ");
+
+                    $stmt->execute([
+                        $request['user_id'],
+                        $request['smelter_id'],
+                        $adminId
+                    ]);
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Update request
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        UPDATE access_requests
+                        SET
+                            status = 'approved',
+                            approved_by = ?,
+                            approved_at = NOW()
+                        WHERE id = ?
+                          AND status = 'pending'
+                    ");
+
+                    $stmt->execute([
+                        $adminId,
+                        $requestId
+                    ]);
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Approval history
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        INSERT INTO user_approvals (
+                            user_id,
+                            approved_by,
+                            action,
+                            notes,
+                            created_at
+                        )
+                        VALUES (
+                            ?,
+                            ?,
+                            'approved',
+                            ?,
+                            NOW()
+                        )
+                    ");
+
+                    $stmt->execute([
+                        $request['user_id'],
+                        $adminId,
+                        'Admin menyetujui request Smelter tambahan: '
+                        . $request['smelter_name']
+                    ]);
+
+                    $pdo->commit();
+
+                    $success =
+                        'Request Smelter tambahan berhasil disetujui.';
                 }
 
-                if ($request['status'] !== 'pending') {
-                    throw new Exception(
-                        'Request sudah diproses.'
-                    );
-                }
-
-                if ($request['role_name'] !== 'spv') {
-                    throw new Exception(
-                        'Hanya SPV yang dapat memiliki akses Smelter.'
-                    );
-                }
-
-                if ($request['user_status'] !== 'active') {
-                    throw new Exception(
-                        'Akun SPV belum aktif.'
-                    );
-                }
-
-                if ($request['smelter_status'] !== 'active') {
-                    throw new Exception(
-                        'Smelter tidak aktif.'
-                    );
-                }
 
                 /*
                 |--------------------------------------------------------------------------
-                | Pastikan divisi SPV sama dengan divisi Smelter
+                | REJECT ADDITIONAL SMELTER
                 |--------------------------------------------------------------------------
                 */
 
-                if (
-                    (int) $request['user_division_id']
-                    !==
-                    (int) $request['smelter_division_id']
-                ) {
+                elseif ($action === 'reject_smelter') {
+
+                    if ($reason === '') {
+                        throw new Exception(
+                            'Alasan penolakan wajib diisi.'
+                        );
+                    }
+
+                    if (mb_strlen($reason) > 1000) {
+                        throw new Exception(
+                            'Alasan penolakan maksimal 1000 karakter.'
+                        );
+                    }
+
+                    $pdo->beginTransaction();
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Ambil request
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        SELECT
+                            ar.id,
+                            ar.user_id,
+                            ar.smelter_id,
+                            ar.request_type,
+                            ar.status,
+
+                            u.name AS user_name,
+                            u.status AS user_status,
+
+                            r.name AS role_name,
+
+                            s.name AS smelter_name,
+                            s.division_id AS smelter_division_id,
+                            s.status AS smelter_status
+
+                        FROM access_requests ar
+
+                        INNER JOIN users u
+                            ON u.id = ar.user_id
+
+                        INNER JOIN roles r
+                            ON r.id = u.role_id
+
+                        INNER JOIN smelters s
+                            ON s.id = ar.smelter_id
+
+                        WHERE ar.id = ?
+
+                        LIMIT 1
+                    ");
+
+                    $stmt->execute([
+                        $requestId
+                    ]);
+
+                    $request = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$request) {
+                        throw new Exception(
+                            'Request tidak ditemukan.'
+                        );
+                    }
+
+                    if ($request['request_type'] !== 'additional_smelter') {
+                        throw new Exception(
+                            'Request bukan permintaan Smelter tambahan.'
+                        );
+                    }
+
+                    if ($request['status'] !== 'pending') {
+                        throw new Exception(
+                            'Request sudah diproses.'
+                        );
+                    }
+
+                    if ($request['role_name'] !== 'spv') {
+                        throw new Exception(
+                            'Request ini bukan milik SPV.'
+                        );
+                    }
+
+                    if ($request['user_status'] !== 'active') {
+                        throw new Exception(
+                            'Akun SPV tidak aktif.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Reject request
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        UPDATE access_requests
+                        SET
+                            status = 'rejected',
+                            approved_by = ?,
+                            approved_at = NOW(),
+                            rejected_reason = ?
+                        WHERE id = ?
+                          AND status = 'pending'
+                    ");
+
+                    $stmt->execute([
+                        $adminId,
+                        $reason,
+                        $requestId
+                    ]);
+
+                    if ($stmt->rowCount() !== 1) {
+                        throw new Exception(
+                            'Request sudah diproses oleh proses lain.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Approval history
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        INSERT INTO user_approvals (
+                            user_id,
+                            approved_by,
+                            action,
+                            notes,
+                            created_at
+                        )
+                        VALUES (
+                            ?,
+                            ?,
+                            'rejected',
+                            ?,
+                            NOW()
+                        )
+                    ");
+
+                    $stmt->execute([
+                        $request['user_id'],
+                        $adminId,
+                        'Admin menolak request Smelter tambahan: '
+                        . $request['smelter_name']
+                        . '. Alasan: '
+                        . $reason
+                    ]);
+
+                    $pdo->commit();
+
+                    $success =
+                        'Request Smelter tambahan berhasil ditolak.';
+                }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | APPROVE ADDITIONAL TEAM
+                |--------------------------------------------------------------------------
+                */
+
+                elseif ($action === 'approve_team') {
+
+                    $pdo->beginTransaction();
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Ambil request + user + smelter + team
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        SELECT
+                            ar.id,
+                            ar.user_id,
+                            ar.smelter_id,
+                            ar.team_id,
+                            ar.request_type,
+                            ar.status,
+
+                            u.nik,
+                            u.name AS user_name,
+                            u.status AS user_status,
+                            u.division_id AS user_division_id,
+
+                            r.name AS role_name,
+
+                            s.name AS smelter_name,
+                            s.division_id AS smelter_division_id,
+                            s.status AS smelter_status,
+
+                            t.name AS team_name,
+                            t.smelter_id AS team_smelter_id,
+                            t.status AS team_status
+
+                        FROM access_requests ar
+
+                        INNER JOIN users u
+                            ON u.id = ar.user_id
+
+                        INNER JOIN roles r
+                            ON r.id = u.role_id
+
+                        INNER JOIN smelters s
+                            ON s.id = ar.smelter_id
+
+                        INNER JOIN teams t
+                            ON t.id = ar.team_id
+
+                        WHERE ar.id = ?
+
+                        LIMIT 1
+                    ");
+
+                    $stmt->execute([
+                        $requestId
+                    ]);
+
+                    $request = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$request) {
+                        throw new Exception(
+                            'Request tidak ditemukan.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Validasi request
+                    |--------------------------------------------------------------------------
+                    */
+
+                    if ($request['request_type'] !== 'additional_team') {
+                        throw new Exception(
+                            'Request bukan permintaan Team tambahan.'
+                        );
+                    }
+
+                    if ($request['status'] !== 'pending') {
+                        throw new Exception(
+                            'Request sudah diproses.'
+                        );
+                    }
+
+                    if ($request['role_name'] !== 'foreman') {
+                        throw new Exception(
+                            'Hanya Foreman yang dapat memiliki akses Team.'
+                        );
+                    }
+
+                    if ($request['user_status'] !== 'active') {
+                        throw new Exception(
+                            'Akun Foreman tidak aktif.'
+                        );
+                    }
+
+                    if ($request['smelter_status'] !== 'active') {
+                        throw new Exception(
+                            'Smelter tidak aktif.'
+                        );
+                    }
+
+                    if ($request['team_status'] !== 'active') {
+                        throw new Exception(
+                            'Team tidak aktif.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Pastikan Team benar-benar berada di Smelter request
+                    |--------------------------------------------------------------------------
+                    */
+
+                    if (
+                        (int) $request['team_smelter_id']
+                        !==
+                        (int) $request['smelter_id']
+                    ) {
+
+                        throw new Exception(
+                            'Team tidak berada di Smelter yang sesuai.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Pastikan divisi Foreman sama dengan Smelter
+                    |--------------------------------------------------------------------------
+                    */
+
+                    if (
+                        (int) $request['user_division_id']
+                        !==
+                        (int) $request['smelter_division_id']
+                    ) {
+
+                        throw new Exception(
+                            'Team berada di divisi yang berbeda dengan Foreman.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Pastikan tidak ada SPV aktif yang mengontrol Smelter
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        SELECT ua.id
+                        FROM user_access ua
+
+                        INNER JOIN users u
+                            ON u.id = ua.user_id
+
+                        INNER JOIN roles r
+                            ON r.id = u.role_id
+
+                        WHERE ua.smelter_id = ?
+                          AND ua.team_id IS NULL
+                          AND ua.status = 'active'
+                          AND u.status = 'active'
+                          AND r.name = 'spv'
+
+                        LIMIT 1
+                    ");
+
+                    $stmt->execute([
+                        $request['smelter_id']
+                    ]);
+
+                    if ($stmt->fetchColumn()) {
+
+                        throw new Exception(
+                            'Smelter ini sudah dikontrol oleh SPV. '
+                            . 'Request harus diproses oleh SPV tersebut.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Cek apakah Foreman sudah memiliki akses Team
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        SELECT id
+                        FROM user_access
+                        WHERE user_id = ?
+                          AND smelter_id = ?
+                          AND team_id = ?
+                          AND status = 'active'
+                        LIMIT 1
+                    ");
+
+                    $stmt->execute([
+                        $request['user_id'],
+                        $request['smelter_id'],
+                        $request['team_id']
+                    ]);
+
+                    if ($stmt->fetchColumn()) {
+
+                        throw new Exception(
+                            'Foreman sudah memiliki akses ke Team tersebut.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Berikan akses Team
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        INSERT INTO user_access (
+                            user_id,
+                            smelter_id,
+                            team_id,
+                            status,
+                            granted_by,
+                            granted_at,
+                            created_at
+                        )
+                        VALUES (
+                            ?,
+                            ?,
+                            ?,
+                            'active',
+                            ?,
+                            NOW(),
+                            NOW()
+                        )
+                    ");
+
+                    $stmt->execute([
+                        $request['user_id'],
+                        $request['smelter_id'],
+                        $request['team_id'],
+                        $adminId
+                    ]);
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Update request
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        UPDATE access_requests
+                        SET
+                            status = 'approved',
+                            approved_by = ?,
+                            approved_at = NOW()
+                        WHERE id = ?
+                          AND status = 'pending'
+                    ");
+
+                    $stmt->execute([
+                        $adminId,
+                        $requestId
+                    ]);
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Approval history
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        INSERT INTO user_approvals (
+                            user_id,
+                            approved_by,
+                            action,
+                            notes,
+                            created_at
+                        )
+                        VALUES (
+                            ?,
+                            ?,
+                            'approved',
+                            ?,
+                            NOW()
+                        )
+                    ");
+
+                    $stmt->execute([
+                        $request['user_id'],
+                        $adminId,
+                        'Admin menyetujui request Team tambahan: '
+                        . $request['team_name']
+                        . ' - '
+                        . $request['smelter_name']
+                    ]);
+
+                    $pdo->commit();
+
+                    $success =
+                        'Request Team tambahan berhasil disetujui.';
+                }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | REJECT ADDITIONAL TEAM
+                |--------------------------------------------------------------------------
+                */
+
+                elseif ($action === 'reject_team') {
+
+                    if ($reason === '') {
+                        throw new Exception(
+                            'Alasan penolakan wajib diisi.'
+                        );
+                    }
+
+                    if (mb_strlen($reason) > 1000) {
+                        throw new Exception(
+                            'Alasan penolakan maksimal 1000 karakter.'
+                        );
+                    }
+
+                    $pdo->beginTransaction();
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Ambil request
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        SELECT
+                            ar.id,
+                            ar.user_id,
+                            ar.smelter_id,
+                            ar.team_id,
+                            ar.request_type,
+                            ar.status,
+
+                            u.name AS user_name,
+                            u.status AS user_status,
+
+                            r.name AS role_name,
+
+                            s.name AS smelter_name,
+                            s.status AS smelter_status,
+
+                            t.name AS team_name,
+                            t.status AS team_status,
+                            t.smelter_id AS team_smelter_id
+
+                        FROM access_requests ar
+
+                        INNER JOIN users u
+                            ON u.id = ar.user_id
+
+                        INNER JOIN roles r
+                            ON r.id = u.role_id
+
+                        INNER JOIN smelters s
+                            ON s.id = ar.smelter_id
+
+                        INNER JOIN teams t
+                            ON t.id = ar.team_id
+
+                        WHERE ar.id = ?
+
+                        LIMIT 1
+                    ");
+
+                    $stmt->execute([
+                        $requestId
+                    ]);
+
+                    $request = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$request) {
+                        throw new Exception(
+                            'Request tidak ditemukan.'
+                        );
+                    }
+
+                    if ($request['request_type'] !== 'additional_team') {
+                        throw new Exception(
+                            'Request bukan permintaan Team tambahan.'
+                        );
+                    }
+
+                    if ($request['status'] !== 'pending') {
+                        throw new Exception(
+                            'Request sudah diproses.'
+                        );
+                    }
+
+                    if ($request['role_name'] !== 'foreman') {
+                        throw new Exception(
+                            'Request ini bukan milik Foreman.'
+                        );
+                    }
+
+                    if ($request['user_status'] !== 'active') {
+                        throw new Exception(
+                            'Akun Foreman tidak aktif.'
+                        );
+                    }
+
+                    if ($request['smelter_status'] !== 'active') {
+                        throw new Exception(
+                            'Smelter tidak aktif.'
+                        );
+                    }
+
+                    if ($request['team_status'] !== 'active') {
+                        throw new Exception(
+                            'Team tidak aktif.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Pastikan Team sesuai dengan Smelter
+                    |--------------------------------------------------------------------------
+                    */
+
+                    if (
+                        (int) $request['team_smelter_id']
+                        !==
+                        (int) $request['smelter_id']
+                    ) {
+
+                        throw new Exception(
+                            'Team tidak berada di Smelter yang sesuai.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Pastikan tidak ada SPV aktif yang mengontrol Smelter
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        SELECT ua.id
+                        FROM user_access ua
+
+                        INNER JOIN users u
+                            ON u.id = ua.user_id
+
+                        INNER JOIN roles r
+                            ON r.id = u.role_id
+
+                        WHERE ua.smelter_id = ?
+                          AND ua.team_id IS NULL
+                          AND ua.status = 'active'
+                          AND u.status = 'active'
+                          AND r.name = 'spv'
+
+                        LIMIT 1
+                    ");
+
+                    $stmt->execute([
+                        $request['smelter_id']
+                    ]);
+
+                    if ($stmt->fetchColumn()) {
+
+                        throw new Exception(
+                            'Smelter ini sudah dikontrol oleh SPV. '
+                            . 'Request harus diproses oleh SPV tersebut.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Reject request
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        UPDATE access_requests
+                        SET
+                            status = 'rejected',
+                            approved_by = ?,
+                            approved_at = NOW(),
+                            rejected_reason = ?
+                        WHERE id = ?
+                          AND status = 'pending'
+                    ");
+
+                    $stmt->execute([
+                        $adminId,
+                        $reason,
+                        $requestId
+                    ]);
+
+                    if ($stmt->rowCount() !== 1) {
+                        throw new Exception(
+                            'Request sudah diproses oleh proses lain.'
+                        );
+                    }
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Approval history
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $stmt = $pdo->prepare("
+                        INSERT INTO user_approvals (
+                            user_id,
+                            approved_by,
+                            action,
+                            notes,
+                            created_at
+                        )
+                        VALUES (
+                            ?,
+                            ?,
+                            'rejected',
+                            ?,
+                            NOW()
+                        )
+                    ");
+
+                    $stmt->execute([
+                        $request['user_id'],
+                        $adminId,
+                        'Admin menolak request Team tambahan: '
+                        . $request['team_name']
+                        . ' - '
+                        . $request['smelter_name']
+                        . '. Alasan: '
+                        . $reason
+                    ]);
+
+                    $pdo->commit();
+
+                    $success =
+                        'Request Team tambahan berhasil ditolak.';
+                }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | ACTION TIDAK DIKENAL
+                |--------------------------------------------------------------------------
+                */
+
+                else {
 
                     throw new Exception(
-                        'Smelter berada di divisi yang berbeda dengan SPV.'
+                        'Action tidak valid.'
                     );
                 }
 
-                /*
-                |--------------------------------------------------------------------------
-                | Cek apakah SPV sudah memiliki akses
-                |--------------------------------------------------------------------------
-                */
+            } catch (Throwable $e) {
 
-                $stmt = $pdo->prepare("
-                    SELECT id
-                    FROM user_access
-                    WHERE user_id = ?
-                      AND smelter_id = ?
-                      AND team_id IS NULL
-                      AND status = 'active'
-                    LIMIT 1
-                ");
-
-                $stmt->execute([
-                    $request['user_id'],
-                    $request['smelter_id']
-                ]);
-
-                if ($stmt->fetchColumn()) {
-
-                    throw new Exception(
-                        'SPV sudah memiliki akses ke Smelter tersebut.'
-                    );
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
                 }
 
-                /*
-                |--------------------------------------------------------------------------
-                | Berikan akses Smelter
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    INSERT INTO user_access (
-                        user_id,
-                        smelter_id,
-                        team_id,
-                        status,
-                        granted_by,
-                        granted_at,
-                        created_at
-                    )
-                    VALUES (
-                        ?,
-                        ?,
-                        NULL,
-                        'active',
-                        ?,
-                        NOW(),
-                        NOW()
-                    )
-                ");
-
-                $stmt->execute([
-                    $request['user_id'],
-                    $request['smelter_id'],
-                    $adminId
-                ]);
-
-                /*
-                |--------------------------------------------------------------------------
-                | Update request
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    UPDATE access_requests
-                    SET
-                        status = 'approved',
-                        approved_by = ?,
-                        approved_at = NOW()
-                    WHERE id = ?
-                      AND status = 'pending'
-                ");
-
-                $stmt->execute([
-                    $adminId,
-                    $requestId
-                ]);
-
-                /*
-                |--------------------------------------------------------------------------
-                | Approval history
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    INSERT INTO user_approvals (
-                        user_id,
-                        approved_by,
-                        action,
-                        notes,
-                        created_at
-                    )
-                    VALUES (
-                        ?,
-                        ?,
-                        'approved',
-                        ?,
-                        NOW()
-                    )
-                ");
-
-                $stmt->execute([
-                    $request['user_id'],
-                    $adminId,
-                    'Admin menyetujui request Smelter tambahan: '
-                    . $request['smelter_name']
-                ]);
-
-                $pdo->commit();
-
-                $success =
-                    'Request Smelter tambahan berhasil disetujui.';
-
+                $error = $e->getMessage();
             }
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | REJECT ADDITIONAL SMELTER
-            |--------------------------------------------------------------------------
-            */
-
-            elseif ($action === 'reject_smelter') {
-
-                if ($reason === '') {
-                    throw new Exception(
-                        'Alasan penolakan wajib diisi.'
-                    );
-                }
-
-                $pdo->beginTransaction();
-
-                /*
-                |--------------------------------------------------------------------------
-                | Ambil request
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    SELECT
-                        ar.id,
-                        ar.user_id,
-                        ar.smelter_id,
-                        ar.request_type,
-                        ar.status,
-
-                        u.name AS user_name,
-                        u.status AS user_status,
-
-                        r.name AS role_name,
-
-                        s.name AS smelter_name,
-                        s.division_id AS smelter_division_id
-
-                    FROM access_requests ar
-
-                    INNER JOIN users u
-                        ON u.id = ar.user_id
-
-                    INNER JOIN roles r
-                        ON r.id = u.role_id
-
-                    INNER JOIN smelters s
-                        ON s.id = ar.smelter_id
-
-                    WHERE ar.id = ?
-
-                    LIMIT 1
-                ");
-
-                $stmt->execute([
-                    $requestId
-                ]);
-
-                $request = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                if (!$request) {
-                    throw new Exception(
-                        'Request tidak ditemukan.'
-                    );
-                }
-
-                if ($request['request_type'] !== 'additional_smelter') {
-                    throw new Exception(
-                        'Request bukan permintaan Smelter tambahan.'
-                    );
-                }
-
-                if ($request['status'] !== 'pending') {
-                    throw new Exception(
-                        'Request sudah diproses.'
-                    );
-                }
-
-                if ($request['role_name'] !== 'spv') {
-                    throw new Exception(
-                        'Request ini bukan milik SPV.'
-                    );
-                }
-
-                if ($request['user_status'] !== 'active') {
-                    throw new Exception(
-                        'Akun SPV belum aktif.'
-                    );
-                }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Update request
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    UPDATE access_requests
-                    SET
-                        status = 'rejected',
-                        approved_by = ?,
-                        approved_at = NOW(),
-                        rejected_reason = ?
-                    WHERE id = ?
-                      AND status = 'pending'
-                ");
-
-                $stmt->execute([
-                    $adminId,
-                    $reason,
-                    $requestId
-                ]);
-
-                /*
-                |--------------------------------------------------------------------------
-                | Approval history
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    INSERT INTO user_approvals (
-                        user_id,
-                        approved_by,
-                        action,
-                        notes,
-                        created_at
-                    )
-                    VALUES (
-                        ?,
-                        ?,
-                        'rejected',
-                        ?,
-                        NOW()
-                    )
-                ");
-
-                $stmt->execute([
-                    $request['user_id'],
-                    $adminId,
-                    'Admin menolak request Smelter tambahan: '
-                    . $request['smelter_name']
-                    . '. Alasan: '
-                    . $reason
-                ]);
-
-                $pdo->commit();
-
-                $success =
-                    'Request Smelter tambahan ditolak.';
-
-            }
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | APPROVE ADDITIONAL TEAM
-            |--------------------------------------------------------------------------
-            |
-            | Admin hanya boleh approve jika TIDAK ADA SPV aktif
-            | yang mengontrol Smelter tersebut.
-            |--------------------------------------------------------------------------
-            */
-
-            elseif ($action === 'approve_team') {
-
-                $pdo->beginTransaction();
-
-                /*
-                |--------------------------------------------------------------------------
-                | Ambil request
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    SELECT
-                        ar.id,
-                        ar.user_id,
-                        ar.smelter_id,
-                        ar.team_id,
-                        ar.request_type,
-                        ar.status,
-
-                        u.nik,
-                        u.name AS user_name,
-                        u.status AS user_status,
-                        u.division_id AS user_division_id,
-
-                        r.name AS role_name,
-
-                        s.name AS smelter_name,
-                        s.division_id AS smelter_division_id,
-                        s.status AS smelter_status,
-
-                        t.name AS team_name,
-                        t.status AS team_status,
-                        t.smelter_id AS team_smelter_id
-
-                    FROM access_requests ar
-
-                    INNER JOIN users u
-                        ON u.id = ar.user_id
-
-                    INNER JOIN roles r
-                        ON r.id = u.role_id
-
-                    INNER JOIN smelters s
-                        ON s.id = ar.smelter_id
-
-                    INNER JOIN teams t
-                        ON t.id = ar.team_id
-
-                    WHERE ar.id = ?
-
-                    LIMIT 1
-                ");
-
-                $stmt->execute([
-                    $requestId
-                ]);
-
-                $request = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                if (!$request) {
-                    throw new Exception(
-                        'Request tidak ditemukan.'
-                    );
-                }
-
-                if ($request['request_type'] !== 'additional_team') {
-                    throw new Exception(
-                        'Request bukan permintaan Team tambahan.'
-                    );
-                }
-
-                if ($request['status'] !== 'pending') {
-                    throw new Exception(
-                        'Request sudah diproses.'
-                    );
-                }
-
-                if ($request['role_name'] !== 'foreman') {
-                    throw new Exception(
-                        'Request Team hanya dapat digunakan Foreman.'
-                    );
-                }
-
-                if ($request['user_status'] !== 'active') {
-                    throw new Exception(
-                        'Akun Foreman belum aktif.'
-                    );
-                }
-
-                if ($request['smelter_status'] !== 'active') {
-                    throw new Exception(
-                        'Smelter tidak aktif.'
-                    );
-                }
-
-                if ($request['team_status'] !== 'active') {
-                    throw new Exception(
-                        'Team tidak aktif.'
-                    );
-                }
-
-                if (
-                    (int) $request['team_smelter_id']
-                    !==
-                    (int) $request['smelter_id']
-                ) {
-                    throw new Exception(
-                        'Team tidak sesuai dengan Smelter.'
-                    );
-                }
-
-                if (
-                    (int) $request['user_division_id']
-                    !==
-                    (int) $request['smelter_division_id']
-                ) {
-                    throw new Exception(
-                        'Foreman dan Smelter berada di divisi berbeda.'
-                    );
-                }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Cek apakah ada SPV aktif yang mengontrol Smelter
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    SELECT ua.id
-                    FROM user_access ua
-
-                    INNER JOIN users u
-                        ON u.id = ua.user_id
-
-                    INNER JOIN roles r
-                        ON r.id = u.role_id
-
-                    WHERE ua.smelter_id = ?
-                      AND ua.team_id IS NULL
-                      AND ua.status = 'active'
-                      AND u.status = 'active'
-                      AND r.name = 'spv'
-
-                    LIMIT 1
-                ");
-
-                $stmt->execute([
-                    $request['smelter_id']
-                ]);
-
-                if ($stmt->fetchColumn()) {
-
-                    throw new Exception(
-                        'Smelter ini memiliki SPV aktif. '
-                        . 'Request harus diproses oleh SPV.'
-                    );
-                }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Cek akses Team sudah ada
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    SELECT id
-                    FROM user_access
-                    WHERE user_id = ?
-                      AND smelter_id = ?
-                      AND team_id = ?
-                      AND status = 'active'
-                    LIMIT 1
-                ");
-
-                $stmt->execute([
-                    $request['user_id'],
-                    $request['smelter_id'],
-                    $request['team_id']
-                ]);
-
-                if ($stmt->fetchColumn()) {
-
-                    throw new Exception(
-                        'Foreman sudah memiliki akses ke Team tersebut.'
-                    );
-                }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Berikan akses Team
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    INSERT INTO user_access (
-                        user_id,
-                        smelter_id,
-                        team_id,
-                        status,
-                        granted_by,
-                        granted_at,
-                        created_at
-                    )
-                    VALUES (
-                        ?,
-                        ?,
-                        ?,
-                        'active',
-                        ?,
-                        NOW(),
-                        NOW()
-                    )
-                ");
-
-                $stmt->execute([
-                    $request['user_id'],
-                    $request['smelter_id'],
-                    $request['team_id'],
-                    $adminId
-                ]);
-
-                /*
-                |--------------------------------------------------------------------------
-                | Update request
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    UPDATE access_requests
-                    SET
-                        status = 'approved',
-                        approved_by = ?,
-                        approved_at = NOW()
-                    WHERE id = ?
-                      AND status = 'pending'
-                ");
-
-                $stmt->execute([
-                    $adminId,
-                    $requestId
-                ]);
-
-                $pdo->commit();
-
-                $success =
-                    'Request Team berhasil disetujui.';
-
-            }
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | REJECT ADDITIONAL TEAM
-            |--------------------------------------------------------------------------
-            */
-
-            elseif ($action === 'reject_team') {
-
-                if ($reason === '') {
-                    throw new Exception(
-                        'Alasan penolakan wajib diisi.'
-                    );
-                }
-
-                $pdo->beginTransaction();
-
-                /*
-                |--------------------------------------------------------------------------
-                | Ambil request
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    SELECT
-                        ar.id,
-                        ar.user_id,
-                        ar.smelter_id,
-                        ar.team_id,
-                        ar.request_type,
-                        ar.status,
-
-                        u.name AS user_name,
-                        u.status AS user_status,
-
-                        r.name AS role_name,
-
-                        s.name AS smelter_name,
-
-                        t.name AS team_name
-
-                    FROM access_requests ar
-
-                    INNER JOIN users u
-                        ON u.id = ar.user_id
-
-                    INNER JOIN roles r
-                        ON r.id = u.role_id
-
-                    INNER JOIN smelters s
-                        ON s.id = ar.smelter_id
-
-                    INNER JOIN teams t
-                        ON t.id = ar.team_id
-
-                    WHERE ar.id = ?
-
-                    LIMIT 1
-                ");
-
-                $stmt->execute([
-                    $requestId
-                ]);
-
-                $request = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                if (!$request) {
-                    throw new Exception(
-                        'Request tidak ditemukan.'
-                    );
-                }
-
-                if ($request['request_type'] !== 'additional_team') {
-                    throw new Exception(
-                        'Request bukan permintaan Team tambahan.'
-                    );
-                }
-
-                if ($request['status'] !== 'pending') {
-                    throw new Exception(
-                        'Request sudah diproses.'
-                    );
-                }
-
-                if ($request['role_name'] !== 'foreman') {
-                    throw new Exception(
-                        'Request ini bukan milik Foreman.'
-                    );
-                }
-
-                if ($request['user_status'] !== 'active') {
-                    throw new Exception(
-                        'Akun Foreman belum aktif.'
-                    );
-                }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Pastikan tidak ada SPV aktif
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    SELECT ua.id
-                    FROM user_access ua
-
-                    INNER JOIN users u
-                        ON u.id = ua.user_id
-
-                    INNER JOIN roles r
-                        ON r.id = u.role_id
-
-                    WHERE ua.smelter_id = ?
-                      AND ua.team_id IS NULL
-                      AND ua.status = 'active'
-                      AND u.status = 'active'
-                      AND r.name = 'spv'
-
-                    LIMIT 1
-                ");
-
-                $stmt->execute([
-                    $request['smelter_id']
-                ]);
-
-                if ($stmt->fetchColumn()) {
-
-                    throw new Exception(
-                        'Smelter memiliki SPV aktif. '
-                        . 'Request harus diproses oleh SPV.'
-                    );
-                }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Reject
-                |--------------------------------------------------------------------------
-                */
-
-                $stmt = $pdo->prepare("
-                    UPDATE access_requests
-                    SET
-                        status = 'rejected',
-                        approved_by = ?,
-                        approved_at = NOW(),
-                        rejected_reason = ?
-                    WHERE id = ?
-                      AND status = 'pending'
-                ");
-
-                $stmt->execute([
-                    $adminId,
-                    $reason,
-                    $requestId
-                ]);
-
-                $pdo->commit();
-
-                $success =
-                    'Request Team ditolak.';
-
-            }
-
-            else {
-
-                throw new Exception(
-                    'Action tidak dikenali.'
-                );
-            }
-
-        } catch (Throwable $e) {
-
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-
-            $error = $e->getMessage();
         }
     }
-}
+
+    }
+
 
 
 /*
 |--------------------------------------------------------------------------
-| REQUEST SMELTER TAMBAHAN
-|--------------------------------------------------------------------------
-|
-| Hanya request dari SPV yang sudah ACTIVE.
+| LOAD PENDING SMELTER REQUESTS
 |--------------------------------------------------------------------------
 */
+
+$pendingSmelterRequests = [];
 
 $stmt = $pdo->prepare("
     SELECT
         ar.id,
+        ar.user_id,
+        ar.smelter_id,
+        ar.request_type,
+        ar.status,
         ar.requested_reason,
         ar.created_at,
 
@@ -878,7 +1059,6 @@ $stmt = $pdo->prepare("
 
         d.name AS division_name,
 
-        s.id AS smelter_id,
         s.name AS smelter_name
 
     FROM access_requests ar
@@ -889,50 +1069,54 @@ $stmt = $pdo->prepare("
     INNER JOIN roles r
         ON r.id = u.role_id
 
-    INNER JOIN divisions d
-        ON d.id = u.division_id
-
     INNER JOIN smelters s
         ON s.id = ar.smelter_id
+
+    INNER JOIN divisions d
+        ON d.id = s.division_id
 
     WHERE ar.request_type = 'additional_smelter'
       AND ar.status = 'pending'
       AND u.status = 'active'
       AND r.name = 'spv'
+      AND s.status = 'active'
 
     ORDER BY ar.created_at ASC
 ");
 
 $stmt->execute();
 
-$smelterRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$pendingSmelterRequests =
+    $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 
 /*
 |--------------------------------------------------------------------------
-| REQUEST TEAM TAMBAHAN
-|--------------------------------------------------------------------------
-|
-| Hanya request Foreman yang belum memiliki SPV aktif
-| pada Smelter tujuan.
+| LOAD PENDING TEAM REQUESTS
 |--------------------------------------------------------------------------
 */
+
+$pendingTeamRequests = [];
 
 $stmt = $pdo->prepare("
     SELECT
         ar.id,
+        ar.user_id,
+        ar.smelter_id,
+        ar.team_id,
+        ar.request_type,
+        ar.status,
         ar.requested_reason,
         ar.created_at,
 
         u.nik,
         u.name AS user_name,
+        u.email,
 
         d.name AS division_name,
 
-        s.id AS smelter_id,
         s.name AS smelter_name,
 
-        t.id AS team_id,
         t.name AS team_name
 
     FROM access_requests ar
@@ -943,34 +1127,37 @@ $stmt = $pdo->prepare("
     INNER JOIN roles r
         ON r.id = u.role_id
 
-    INNER JOIN divisions d
-        ON d.id = u.division_id
-
     INNER JOIN smelters s
         ON s.id = ar.smelter_id
 
+    INNER JOIN divisions d
+        ON d.id = s.division_id
+
     INNER JOIN teams t
         ON t.id = ar.team_id
+       AND t.smelter_id = ar.smelter_id
 
     WHERE ar.request_type = 'additional_team'
       AND ar.status = 'pending'
       AND u.status = 'active'
       AND r.name = 'foreman'
+      AND s.status = 'active'
+      AND t.status = 'active'
 
       AND NOT EXISTS (
           SELECT 1
-          FROM user_access ua
+          FROM user_access spv_access
 
-          INNER JOIN users spv
-              ON spv.id = ua.user_id
+          INNER JOIN users spv_user
+              ON spv_user.id = spv_access.user_id
 
           INNER JOIN roles spv_role
-              ON spv_role.id = spv.role_id
+              ON spv_role.id = spv_user.role_id
 
-          WHERE ua.smelter_id = ar.smelter_id
-            AND ua.team_id IS NULL
-            AND ua.status = 'active'
-            AND spv.status = 'active'
+          WHERE spv_access.smelter_id = ar.smelter_id
+            AND spv_access.team_id IS NULL
+            AND spv_access.status = 'active'
+            AND spv_user.status = 'active'
             AND spv_role.name = 'spv'
       )
 
@@ -979,10 +1166,10 @@ $stmt = $pdo->prepare("
 
 $stmt->execute();
 
-$teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$pendingTeamRequests =
+    $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 ?>
-
 <!DOCTYPE html>
 <html lang="id">
 
@@ -992,7 +1179,7 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     <meta
         name="viewport"
-        content="width=device-width, initial-scale=1"
+        content="width=device-width, initial-scale=1.0"
     >
 
     <title>
@@ -1006,49 +1193,61 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 </head>
 
-<body class="bg-light">
+<body>
 
+<div class="container-fluid py-4">
 
-<nav class="navbar navbar-dark bg-dark">
-
-    <div class="container-fluid">
-
-        <span class="navbar-brand">
-            Smelter Management - Admin
-        </span>
+    <div class="d-flex justify-content-between align-items-center mb-4">
 
         <div>
 
-            <a
-                href="dashboard"
-                class="btn btn-outline-light btn-sm"
-            >
-                Dashboard
-            </a>
+            <h2 class="mb-1">
+                Access Requests
+            </h2>
+
+            <p class="text-muted mb-0">
+                Kelola permintaan akses tambahan.
+            </p>
 
         </div>
 
+        <a
+            href="dashboard"
+            class="btn btn-outline-secondary"
+        >
+            Kembali
+        </a>
+
     </div>
 
-</nav>
 
+    <?php if ($error !== ''): ?>
 
-<div class="container py-4">
-
-
-    <?php if ($success): ?>
-
-        <div class="alert alert-success">
-            <?= htmlspecialchars($success) ?>
+        <div
+            class="alert alert-danger"
+            role="alert"
+        >
+            <?= htmlspecialchars(
+                $error,
+                ENT_QUOTES,
+                'UTF-8'
+            ) ?>
         </div>
 
     <?php endif; ?>
 
 
-    <?php if ($error): ?>
+    <?php if ($success !== ''): ?>
 
-        <div class="alert alert-danger">
-            <?= htmlspecialchars($error) ?>
+        <div
+            class="alert alert-success"
+            role="alert"
+        >
+            <?= htmlspecialchars(
+                $success,
+                ENT_QUOTES,
+                'UTF-8'
+            ) ?>
         </div>
 
     <?php endif; ?>
@@ -1056,7 +1255,7 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     <!--
     |--------------------------------------------------------------------------
-    | REQUEST SMELTER
+    | SMELTER REQUESTS
     |--------------------------------------------------------------------------
     -->
 
@@ -1064,18 +1263,25 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         <div class="card-header">
 
-            <strong>
-                Approval Smelter Tambahan SPV
-            </strong>
+            <div class="d-flex justify-content-between">
+
+                <strong>
+                    Request Smelter Tambahan
+                </strong>
+
+                <span class="badge bg-primary">
+                    <?= count($pendingSmelterRequests) ?>
+                </span>
+
+            </div>
 
         </div>
 
         <div class="card-body">
 
+            <?php if (empty($pendingSmelterRequests)): ?>
 
-            <?php if (!$smelterRequests): ?>
-
-                <div class="alert alert-info mb-0">
+                <div class="alert alert-light border mb-0">
                     Tidak ada request Smelter tambahan.
                 </div>
 
@@ -1083,72 +1289,107 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                 <div class="table-responsive">
 
-                    <table class="table table-bordered table-hover">
+                    <table class="table table-bordered table-hover align-middle">
 
-                        <thead class="table-light">
+                        <thead>
 
-                            <tr>
+                        <tr>
 
-                                <th>NIK</th>
+                            <th>
+                                NIK
+                            </th>
 
-                                <th>SPV</th>
+                            <th>
+                                Nama
+                            </th>
 
-                                <th>Divisi</th>
+                            <th>
+                                Email
+                            </th>
 
-                                <th>Smelter</th>
+                            <th>
+                                Divisi
+                            </th>
 
-                                <th>Alasan</th>
+                            <th>
+                                Smelter
+                            </th>
 
-                                <th>Tanggal</th>
+                            <th>
+                                Alasan
+                            </th>
 
-                                <th>Aksi</th>
+                            <th>
+                                Tanggal
+                            </th>
 
-                            </tr>
+                            <th>
+                                Aksi
+                            </th>
+
+                        </tr>
 
                         </thead>
 
                         <tbody>
 
-                        <?php foreach ($smelterRequests as $request): ?>
+                        <?php foreach ($pendingSmelterRequests as $request): ?>
 
                             <tr>
 
                                 <td>
                                     <?= htmlspecialchars(
-                                        $request['nik']
+                                        $request['nik'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
                                     ) ?>
                                 </td>
 
                                 <td>
                                     <?= htmlspecialchars(
-                                        $request['user_name']
+                                        $request['user_name'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
                                     ) ?>
                                 </td>
 
                                 <td>
                                     <?= htmlspecialchars(
-                                        $request['division_name']
-                                    ) ?>
-                                </td>
-
-                                <td>
-                                    <strong>
-                                        <?= htmlspecialchars(
-                                            $request['smelter_name']
-                                        ) ?>
-                                    </strong>
-                                </td>
-
-                                <td>
-                                    <?= htmlspecialchars(
-                                        $request['requested_reason']
-                                        ?? '-'
+                                        $request['email'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
                                     ) ?>
                                 </td>
 
                                 <td>
                                     <?= htmlspecialchars(
-                                        $request['created_at']
+                                        $request['division_name'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    ) ?>
+                                </td>
+
+                                <td>
+                                    <?= htmlspecialchars(
+                                        $request['smelter_name'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    ) ?>
+                                </td>
+
+                                <td>
+                                    <?= htmlspecialchars(
+                                        $request['requested_reason'] ?? '-',
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    ) ?>
+                                </td>
+
+                                <td>
+                                    <?= htmlspecialchars(
+                                        $request['created_at'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
                                     ) ?>
                                 </td>
 
@@ -1167,6 +1408,16 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                                 type="hidden"
                                                 name="action"
                                                 value="approve_smelter"
+                                            >
+
+                                            <input
+                                                type="hidden"
+                                                name="csrf_token"
+                                                value="<?= htmlspecialchars(
+                                                    $csrfToken,
+                                                    ENT_QUOTES,
+                                                    'UTF-8'
+                                                ) ?>"
                                             >
 
                                             <input
@@ -1218,7 +1469,7 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     <!--
     |--------------------------------------------------------------------------
-    | REQUEST TEAM
+    | TEAM REQUESTS
     |--------------------------------------------------------------------------
     -->
 
@@ -1226,99 +1477,148 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         <div class="card-header">
 
-            <strong>
-                Approval Team Tambahan Foreman
-            </strong>
+            <div class="d-flex justify-content-between">
+
+                <strong>
+                    Request Team Tambahan
+                </strong>
+
+                <span class="badge bg-primary">
+                    <?= count($pendingTeamRequests) ?>
+                </span>
+
+            </div>
 
         </div>
 
         <div class="card-body">
 
+            <?php if (empty($pendingTeamRequests)): ?>
 
-            <?php if (!$teamRequests): ?>
-
-                <div class="alert alert-info mb-0">
-                    Tidak ada request Team yang perlu diproses Admin.
+                <div class="alert alert-light border mb-0">
+                    Tidak ada request Team tambahan
+                    yang perlu diproses Admin.
                 </div>
 
             <?php else: ?>
 
                 <div class="table-responsive">
 
-                    <table class="table table-bordered table-hover">
+                    <table class="table table-bordered table-hover align-middle">
 
-                        <thead class="table-light">
+                        <thead>
 
-                            <tr>
+                        <tr>
 
-                                <th>NIK</th>
+                            <th>
+                                NIK
+                            </th>
 
-                                <th>Foreman</th>
+                            <th>
+                                Nama
+                            </th>
 
-                                <th>Divisi</th>
+                            <th>
+                                Email
+                            </th>
 
-                                <th>Smelter</th>
+                            <th>
+                                Divisi
+                            </th>
 
-                                <th>Team</th>
+                            <th>
+                                Smelter
+                            </th>
 
-                                <th>Alasan</th>
+                            <th>
+                                Team
+                            </th>
 
-                                <th>Tanggal</th>
+                            <th>
+                                Alasan
+                            </th>
 
-                                <th>Aksi</th>
+                            <th>
+                                Tanggal
+                            </th>
 
-                            </tr>
+                            <th>
+                                Aksi
+                            </th>
+
+                        </tr>
 
                         </thead>
 
                         <tbody>
 
-                        <?php foreach ($teamRequests as $request): ?>
+                        <?php foreach ($pendingTeamRequests as $request): ?>
 
                             <tr>
 
                                 <td>
                                     <?= htmlspecialchars(
-                                        $request['nik']
+                                        $request['nik'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
                                     ) ?>
                                 </td>
 
                                 <td>
                                     <?= htmlspecialchars(
-                                        $request['user_name']
+                                        $request['user_name'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
                                     ) ?>
                                 </td>
 
                                 <td>
                                     <?= htmlspecialchars(
-                                        $request['division_name']
+                                        $request['email'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
                                     ) ?>
                                 </td>
 
                                 <td>
                                     <?= htmlspecialchars(
-                                        $request['smelter_name']
+                                        $request['division_name'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    ) ?>
+                                </td>
+
+                                <td>
+                                    <?= htmlspecialchars(
+                                        $request['smelter_name'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
                                     ) ?>
                                 </td>
 
                                 <td>
                                     <strong>
                                         <?= htmlspecialchars(
-                                            $request['team_name']
+                                            $request['team_name'],
+                                            ENT_QUOTES,
+                                            'UTF-8'
                                         ) ?>
                                     </strong>
                                 </td>
 
                                 <td>
                                     <?= htmlspecialchars(
-                                        $request['requested_reason']
-                                        ?? '-'
+                                        $request['requested_reason'] ?? '-',
+                                        ENT_QUOTES,
+                                        'UTF-8'
                                     ) ?>
                                 </td>
 
                                 <td>
                                     <?= htmlspecialchars(
-                                        $request['created_at']
+                                        $request['created_at'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
                                     ) ?>
                                 </td>
 
@@ -1337,6 +1637,16 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                                 type="hidden"
                                                 name="action"
                                                 value="approve_team"
+                                            >
+
+                                            <input
+                                                type="hidden"
+                                                name="csrf_token"
+                                                value="<?= htmlspecialchars(
+                                                    $csrfToken,
+                                                    ENT_QUOTES,
+                                                    'UTF-8'
+                                                ) ?>"
                                             >
 
                                             <input
@@ -1430,6 +1740,16 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                     <input
                         type="hidden"
+                        name="csrf_token"
+                        value="<?= htmlspecialchars(
+                            $csrfToken,
+                            ENT_QUOTES,
+                            'UTF-8'
+                        ) ?>"
+                    >
+
+                    <input
+                        type="hidden"
                         name="request_id"
                         id="rejectSmelterRequestId"
                     >
@@ -1517,6 +1837,16 @@ $teamRequests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         type="hidden"
                         name="action"
                         value="reject_team"
+                    >
+
+                    <input
+                        type="hidden"
+                        name="csrf_token"
+                        value="<?= htmlspecialchars(
+                            $csrfToken,
+                            ENT_QUOTES,
+                            'UTF-8'
+                        ) ?>"
                     >
 
                     <input

@@ -3,23 +3,44 @@
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../middleware/foreman.php';
 
+
 /*
 |--------------------------------------------------------------------------
-| Ambil informasi Foreman
+| User Login
 |--------------------------------------------------------------------------
 */
 
 $userId = (int) $_SESSION['user_id'];
 
+
+/*
+|--------------------------------------------------------------------------
+| Ambil informasi Foreman dari database
+|--------------------------------------------------------------------------
+|
+| Jangan mempercayai data role/status yang hanya berasal dari session.
+| Kita validasi ulang dari database.
+|
+*/
+
 $stmt = $pdo->prepare("
     SELECT
+        u.id,
         u.nik,
         u.name,
         u.email,
+        u.division_id,
+        u.status,
+        r.name AS role_name,
         d.name AS division_name
     FROM users u
+
+    INNER JOIN roles r
+        ON r.id = u.role_id
+
     LEFT JOIN divisions d
         ON d.id = u.division_id
+
     WHERE u.id = ?
     LIMIT 1
 ");
@@ -28,32 +49,135 @@ $stmt->execute([$userId]);
 
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
+
+/*
+|--------------------------------------------------------------------------
+| User tidak ditemukan
+|--------------------------------------------------------------------------
+*/
+
 if (!$user) {
-    session_unset();
+
+    $_SESSION = [];
+
+    if (ini_get('session.use_cookies')) {
+
+        $params = session_get_cookie_params();
+
+        setcookie(
+            session_name(),
+            '',
+            time() - 42000,
+            $params['path'],
+            $params['domain'],
+            $params['secure'],
+            $params['httponly']
+        );
+    }
+
     session_destroy();
 
     header('Location: ../auth/login');
+
     exit;
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| Ambil Team yang memang dimiliki Foreman
+| Validasi status
+|--------------------------------------------------------------------------
+*/
+
+if ($user['status'] !== 'active') {
+
+    $_SESSION = [];
+
+    if (ini_get('session.use_cookies')) {
+
+        $params = session_get_cookie_params();
+
+        setcookie(
+            session_name(),
+            '',
+            time() - 42000,
+            $params['path'],
+            $params['domain'],
+            $params['secure'],
+            $params['httponly']
+        );
+    }
+
+    session_destroy();
+
+    header('Location: ../auth/login');
+
+    exit;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Validasi Role
+|--------------------------------------------------------------------------
+*/
+
+if ($user['role_name'] !== 'foreman') {
+
+    http_response_code(403);
+
+    exit(
+        '403 - Anda tidak memiliki akses ke halaman Foreman.'
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Validasi Division
+|--------------------------------------------------------------------------
+*/
+
+$divisionId = (int) ($user['division_id'] ?? 0);
+
+if ($divisionId <= 0) {
+
+    http_response_code(403);
+
+    exit(
+        '403 - Divisi user tidak valid.'
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Ambil Team yang BENAR-BENAR dimiliki Foreman
 |--------------------------------------------------------------------------
 |
-| Foreman hanya boleh melihat Team yang terdapat di user_access miliknya.
+| Syarat:
+|
+| 1. user_access.user_id = user login
+| 2. team_id tidak NULL
+| 3. user_access.status = active
+| 4. Smelter aktif
+| 5. Team aktif
+| 6. Team memang milik Smelter
+| 7. Smelter berada pada divisi user
 |
 */
 
 $stmt = $pdo->prepare("
     SELECT
         ua.id AS access_id,
+
         s.id AS smelter_id,
         s.name AS smelter_name,
+
         t.id AS team_id,
         t.name AS team_name,
         t.link AS team_link
+
     FROM user_access ua
 
     INNER JOIN smelters s
@@ -64,17 +188,26 @@ $stmt = $pdo->prepare("
        AND t.smelter_id = ua.smelter_id
 
     WHERE ua.user_id = ?
+
       AND ua.team_id IS NOT NULL
+
       AND ua.status = 'active'
+
       AND s.status = 'active'
+
       AND t.status = 'active'
+
+      AND s.division_id = ?
 
     ORDER BY
         s.name ASC,
         t.name ASC
 ");
 
-$stmt->execute([$userId]);
+$stmt->execute([
+    $userId,
+    $divisionId
+]);
 
 $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -87,11 +220,15 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     <meta charset="UTF-8">
 
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
     <title>
         Dashboard Foreman - Smelter Management
     </title>
+
 
     <style>
 
@@ -99,7 +236,9 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             box-sizing: border-box;
         }
 
+
         body {
+
             margin: 0;
 
             font-family:
@@ -112,6 +251,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             color: #1e293b;
         }
 
+
         /*
         |--------------------------------------------------------------------------
         | Navbar
@@ -119,6 +259,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
         */
 
         .navbar {
+
             background: #0f172a;
 
             color: white;
@@ -134,13 +275,17 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             gap: 20px;
         }
 
+
         .brand {
+
             font-size: 20px;
 
             font-weight: bold;
         }
 
+
         .nav-right {
+
             display: flex;
 
             align-items: center;
@@ -148,13 +293,17 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             gap: 15px;
         }
 
+
         .user-name {
+
             font-size: 14px;
 
             color: #cbd5e1;
         }
 
+
         .logout {
+
             display: inline-block;
 
             padding: 8px 14px;
@@ -170,9 +319,12 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             font-size: 13px;
         }
 
+
         .logout:hover {
+
             background: #334155;
         }
+
 
         /*
         |--------------------------------------------------------------------------
@@ -181,6 +333,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
         */
 
         .container {
+
             width: 100%;
 
             max-width: 1200px;
@@ -190,6 +343,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             padding: 30px 20px;
         }
 
+
         /*
         |--------------------------------------------------------------------------
         | Header
@@ -197,20 +351,26 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
         */
 
         .page-header {
+
             margin-bottom: 25px;
         }
 
+
         .page-header h1 {
+
             margin: 0 0 8px;
 
             font-size: 28px;
         }
 
+
         .page-header p {
+
             margin: 0;
 
             color: #64748b;
         }
+
 
         /*
         |--------------------------------------------------------------------------
@@ -219,6 +379,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
         */
 
         .info-grid {
+
             display: grid;
 
             grid-template-columns:
@@ -229,7 +390,9 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             margin-bottom: 30px;
         }
 
+
         .info-card {
+
             background: white;
 
             border-radius: 10px;
@@ -242,7 +405,9 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 0 2px 8px rgba(0, 0, 0, 0.04);
         }
 
+
         .info-label {
+
             display: block;
 
             font-size: 12px;
@@ -254,11 +419,14 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             text-transform: uppercase;
         }
 
+
         .info-value {
+
             font-size: 16px;
 
             font-weight: 600;
         }
+
 
         /*
         |--------------------------------------------------------------------------
@@ -267,6 +435,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
         */
 
         .section-title {
+
             display: flex;
 
             justify-content: space-between;
@@ -276,13 +445,17 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             margin-bottom: 15px;
         }
 
+
         .section-title h2 {
+
             margin: 0;
 
             font-size: 20px;
         }
 
+
         .team-count {
+
             background: #e2e8f0;
 
             color: #334155;
@@ -294,6 +467,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             font-size: 12px;
         }
 
+
         /*
         |--------------------------------------------------------------------------
         | Team Cards
@@ -301,6 +475,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
         */
 
         .team-grid {
+
             display: grid;
 
             grid-template-columns:
@@ -309,7 +484,9 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             gap: 20px;
         }
 
+
         .team-card {
+
             background: white;
 
             border: 1px solid #e2e8f0;
@@ -322,7 +499,9 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 0 3px 10px rgba(0, 0, 0, 0.05);
         }
 
+
         .smelter-name {
+
             font-size: 13px;
 
             color: #64748b;
@@ -330,7 +509,9 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             margin-bottom: 8px;
         }
 
+
         .team-name {
+
             font-size: 20px;
 
             font-weight: bold;
@@ -338,7 +519,9 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             margin-bottom: 20px;
         }
 
+
         .team-link {
+
             display: block;
 
             width: 100%;
@@ -360,15 +543,20 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             font-weight: 600;
         }
 
+
         .team-link:hover {
+
             background: #1d4ed8;
         }
 
+
         .team-link.disabled {
+
             background: #94a3b8;
 
             cursor: not-allowed;
         }
+
 
         /*
         |--------------------------------------------------------------------------
@@ -377,6 +565,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
         */
 
         .empty {
+
             background: white;
 
             border: 1px solid #e2e8f0;
@@ -390,6 +579,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             color: #64748b;
         }
 
+
         /*
         |--------------------------------------------------------------------------
         | Action
@@ -397,6 +587,7 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
         */
 
         .actions {
+
             margin-top: 30px;
 
             display: flex;
@@ -406,7 +597,9 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             flex-wrap: wrap;
         }
 
+
         .btn {
+
             display: inline-block;
 
             padding: 11px 18px;
@@ -420,25 +613,34 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
             font-weight: 600;
         }
 
+
         .btn-warning {
+
             background: #f59e0b;
 
             color: #ffffff;
         }
 
+
         .btn-warning:hover {
+
             background: #d97706;
         }
 
+
         .btn-secondary {
+
             background: #475569;
 
             color: white;
         }
 
+
         .btn-secondary:hover {
+
             background: #334155;
         }
+
 
         /*
         |--------------------------------------------------------------------------
@@ -449,19 +651,25 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
         @media (max-width: 900px) {
 
             .team-grid {
+
                 grid-template-columns:
                     repeat(2, 1fr);
             }
 
+
             .info-grid {
+
                 grid-template-columns:
                     repeat(2, 1fr);
             }
+
         }
+
 
         @media (max-width: 600px) {
 
             .navbar {
+
                 padding: 14px 18px;
 
                 align-items: flex-start;
@@ -469,53 +677,73 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 flex-direction: column;
             }
 
+
             .nav-right {
+
                 width: 100%;
 
                 justify-content: space-between;
             }
 
+
             .container {
+
                 padding: 20px 15px;
             }
 
+
             .info-grid {
+
                 grid-template-columns: 1fr;
             }
+
 
             .team-grid {
+
                 grid-template-columns: 1fr;
             }
 
+
             .page-header h1 {
+
                 font-size: 23px;
             }
+
         }
 
     </style>
 
 </head>
 
+
 <body>
 
 
-<!--
-|--------------------------------------------------------------------------
-| NAVBAR
-|--------------------------------------------------------------------------
--->
+<!-- =========================================================
+     NAVBAR
+========================================================== -->
 
 <nav class="navbar">
 
     <div class="brand">
+
         Smelter Management
+
     </div>
+
 
     <div class="nav-right">
 
         <span class="user-name">
-            <?= htmlspecialchars($user['name']) ?>
+
+            <?= htmlspecialchars(
+                $user['name'],
+                ENT_QUOTES,
+                'UTF-8'
+            ) ?>
+
         </span>
+
 
         <a
             href="../auth/logout"
@@ -529,64 +757,69 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
 </nav>
 
 
-<!--
-|--------------------------------------------------------------------------
-| MAIN
-|--------------------------------------------------------------------------
--->
+<!-- =========================================================
+     MAIN
+========================================================== -->
 
 <main class="container">
 
 
-    <!-- PAGE HEADER -->
+    <!-- =====================================================
+         PAGE HEADER
+    ====================================================== -->
 
     <div class="page-header">
 
         <h1>
+
             Dashboard Foreman
+
         </h1>
 
+
         <p>
+
             Selamat datang,
+
             <strong>
-                <?= htmlspecialchars($user['name']) ?>
+
+                <?= htmlspecialchars(
+                    $user['name'],
+                    ENT_QUOTES,
+                    'UTF-8'
+                ) ?>
+
             </strong>
+
         </p>
 
     </div>
 
 
-    <!--
-    |--------------------------------------------------------------------------
-    | INFORMASI USER
-    |--------------------------------------------------------------------------
-    -->
+    <!-- =====================================================
+         INFORMASI USER
+    ====================================================== -->
 
     <div class="info-grid">
 
+
         <div class="info-card">
 
             <span class="info-label">
+
                 NIK
+
             </span>
 
-            <div class="info-value">
-                <?= htmlspecialchars($user['nik']) ?>
-            </div>
-
-        </div>
-
-
-        <div class="info-card">
-
-            <span class="info-label">
-                Divisi
-            </span>
 
             <div class="info-value">
+
                 <?= htmlspecialchars(
-                    $user['division_name'] ?? '-'
+                    $user['nik'],
+                    ENT_QUOTES,
+                    'UTF-8'
                 ) ?>
+
             </div>
 
         </div>
@@ -595,11 +828,38 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
         <div class="info-card">
 
             <span class="info-label">
-                Role
+
+                Divisi
+
             </span>
 
+
             <div class="info-value">
+
+                <?= htmlspecialchars(
+                    $user['division_name'] ?? '-',
+                    ENT_QUOTES,
+                    'UTF-8'
+                ) ?>
+
+            </div>
+
+        </div>
+
+
+        <div class="info-card">
+
+            <span class="info-label">
+
+                Role
+
+            </span>
+
+
+            <div class="info-value">
+
                 Foreman
+
             </div>
 
         </div>
@@ -607,20 +867,25 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 
 
-    <!--
-    |--------------------------------------------------------------------------
-    | TEAM SAYA
-    |--------------------------------------------------------------------------
-    -->
+    <!-- =====================================================
+         TEAM SAYA
+    ====================================================== -->
 
     <div class="section-title">
 
         <h2>
+
             Team Saya
+
         </h2>
 
+
         <span class="team-count">
-            <?= count($myTeams) ?> Team
+
+            <?= count($myTeams) ?>
+
+            Team
+
         </span>
 
     </div>
@@ -628,45 +893,62 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     <?php if (!$myTeams): ?>
 
+
         <div class="empty">
 
             <strong>
+
                 Belum ada Team yang diberikan.
+
             </strong>
 
+
             <p>
+
                 Silakan menunggu persetujuan
                 atau mengajukan request Team tambahan.
+
             </p>
 
         </div>
 
+
     <?php else: ?>
+
 
         <div class="team-grid">
 
+
             <?php foreach ($myTeams as $team): ?>
 
+
                 <div class="team-card">
+
 
                     <div class="smelter-name">
 
                         <?= htmlspecialchars(
-                            $team['smelter_name']
+                            $team['smelter_name'],
+                            ENT_QUOTES,
+                            'UTF-8'
                         ) ?>
 
                     </div>
 
+
                     <div class="team-name">
 
                         <?= htmlspecialchars(
-                            $team['team_name']
+                            $team['team_name'],
+                            ENT_QUOTES,
+                            'UTF-8'
                         ) ?>
 
                     </div>
 
 
                     <?php if (!empty($team['team_link'])): ?>
+
 
                         <a
                             href="<?= htmlspecialchars(
@@ -681,42 +963,54 @@ $myTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
                             Buka Link Team
                         </a>
 
+
                     <?php else: ?>
 
+
                         <span class="team-link disabled">
+
                             Link belum tersedia
+
                         </span>
+
 
                     <?php endif; ?>
 
+
                 </div>
+
 
             <?php endforeach; ?>
 
+
         </div>
+
 
     <?php endif; ?>
 
 
-    <!--
-    |--------------------------------------------------------------------------
-    | ACTION
-    |--------------------------------------------------------------------------
-    -->
+    <!-- =====================================================
+         ACTION
+    ====================================================== -->
 
     <div class="actions">
+
 
         <a
             href="access-requests"
             class="btn btn-warning"
         >
+
             + Request Team Tambahan
+
         </a>
+
 
     </div>
 
 
 </main>
+
 
 </body>
 

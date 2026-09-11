@@ -123,6 +123,7 @@ $stmt = $pdo->prepare("
 
     LEFT JOIN teams t
         ON t.id = ua.team_id
+       AND t.smelter_id = ua.smelter_id
 
     LEFT JOIN users granted
         ON granted.id = ua.granted_by
@@ -144,6 +145,41 @@ $stmt->execute([
 ]);
 
 $userAccess = $stmt->fetchAll();
+
+
+/*
+|--------------------------------------------------------------------------
+| VALIDASI INTEGRITAS ACCESS
+|--------------------------------------------------------------------------
+|
+| SPV    : team_id harus NULL
+| Foreman: team_id harus terisi
+|
+| Record yang tidak sesuai aturan tidak boleh dianggap sebagai
+| akses valid hanya karena record user_access ada.
+|--------------------------------------------------------------------------
+*/
+
+foreach ($userAccess as $index => $access) {
+
+    if ($user['role_name'] === 'spv') {
+
+        if ($access['team_id'] !== null) {
+            unset($userAccess[$index]);
+            continue;
+        }
+    }
+
+    if ($user['role_name'] === 'foreman') {
+
+        if ($access['team_id'] === null) {
+            unset($userAccess[$index]);
+            continue;
+        }
+    }
+}
+
+$userAccess = array_values($userAccess);
 
 
 /*
@@ -273,6 +309,7 @@ $stmt = $pdo->prepare("
 
     LEFT JOIN teams t
         ON t.id = ar.team_id
+       AND t.smelter_id = ar.smelter_id
 
     LEFT JOIN users approver
         ON approver.id = ar.approved_by
@@ -385,7 +422,7 @@ function formatDate(?string $date): string
     >
 
     <title>
-        Detail User - <?= htmlspecialchars($user['name']) ?>
+        Detail User - <?= htmlspecialchars($user['name'], ENT_QUOTES, 'UTF-8') ?>
     </title>
 
     <link
@@ -408,7 +445,7 @@ function formatDate(?string $date): string
     <div class="container-fluid">
 
         <a
-            href="dashboard"
+            href="dashboard.php"
             class="navbar-brand"
         >
             Smelter Management
@@ -417,12 +454,12 @@ function formatDate(?string $date): string
 
         <div class="text-white">
 
-            <?= htmlspecialchars($_SESSION['name']) ?>
+            <?= htmlspecialchars($_SESSION['name'], ENT_QUOTES, 'UTF-8') ?>
 
             &nbsp; | &nbsp;
 
             <a
-                href="../auth/logout"
+                href="../auth/logout.php"
                 class="text-white"
             >
                 Logout
@@ -458,7 +495,7 @@ function formatDate(?string $date): string
 
 
         <a
-            href="users"
+            href="users.php"
             class="btn btn-secondary"
         >
             ← Kembali
@@ -486,7 +523,7 @@ function formatDate(?string $date): string
                         <?php if (strtolower($user['role_name']) !== 'admin'): ?>
 
                             <a
-                                href="user-access?id=<?= (int) $user['id'] ?>"
+                                href="user-access.php?id=<?= (int) $user['id'] ?>"
                                 class="btn btn-primary"
                             >
                                 Kelola Access
@@ -509,7 +546,7 @@ function formatDate(?string $date): string
                         <div class="col-md-8">
 
                             <strong>
-                                <?= htmlspecialchars($user['nik']) ?>
+                                <?= htmlspecialchars($user['nik'], ENT_QUOTES, 'UTF-8') ?>
                             </strong>
 
                         </div>
@@ -525,7 +562,7 @@ function formatDate(?string $date): string
 
                         <div class="col-md-8">
 
-                            <?= htmlspecialchars($user['name']) ?>
+                            <?= htmlspecialchars($user['name'], ENT_QUOTES, 'UTF-8') ?>
 
                         </div>
 
@@ -540,7 +577,7 @@ function formatDate(?string $date): string
 
                         <div class="col-md-8">
 
-                            <?= htmlspecialchars($user['email']) ?>
+                            <?= htmlspecialchars($user['email'], ENT_QUOTES, 'UTF-8') ?>
 
                         </div>
 

@@ -3,30 +3,101 @@
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../middleware/foreman.php';
 
-$userId = $_SESSION['user_id'];
+
+/*
+|--------------------------------------------------------------------------
+| User Login
+|--------------------------------------------------------------------------
+*/
+
+$userId = (int) $_SESSION['user_id'];
 
 
 /*
 |--------------------------------------------------------------------------
-| Ambil divisi Foreman
+| CSRF TOKEN
+|--------------------------------------------------------------------------
+*/
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+$csrfToken = $_SESSION['csrf_token'];
+
+
+/*
+|--------------------------------------------------------------------------
+| Ambil data Foreman dari database
 |--------------------------------------------------------------------------
 */
 
 $stmt = $pdo->prepare("
-    SELECT division_id
-    FROM users
-    WHERE id = ?
-      AND status = 'active'
+    SELECT
+        u.id,
+        u.division_id,
+        u.status,
+        r.name AS role_name
+    FROM users u
+    INNER JOIN roles r
+        ON r.id = u.role_id
+    WHERE u.id = ?
     LIMIT 1
 ");
 
 $stmt->execute([$userId]);
 
-$divisionId = $stmt->fetchColumn();
+$user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if (!$divisionId) {
-    die('Divisi Foreman tidak ditemukan.');
+
+/*
+|--------------------------------------------------------------------------
+| Pastikan user valid
+|--------------------------------------------------------------------------
+*/
+
+if (!$user) {
+    http_response_code(403);
+    exit('User tidak ditemukan.');
 }
+
+
+/*
+|--------------------------------------------------------------------------
+| Pastikan user masih active
+|--------------------------------------------------------------------------
+*/
+
+if ($user['status'] !== 'active') {
+    http_response_code(403);
+    exit('Akun Anda tidak aktif.');
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Pastikan role Foreman
+|--------------------------------------------------------------------------
+*/
+
+if ($user['role_name'] !== 'foreman') {
+    http_response_code(403);
+    exit('Anda tidak memiliki akses ke halaman ini.');
+}
+
+
+$divisionId = (int) $user['division_id'];
+
+
+/*
+|--------------------------------------------------------------------------
+| Variable pesan
+|--------------------------------------------------------------------------
+*/
+
+$error = '';
+
+$success = '';
 
 
 /*
@@ -37,21 +108,56 @@ if (!$divisionId) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
+    /*
+    |--------------------------------------------------------------------------
+    | CSRF VALIDATION
+    |--------------------------------------------------------------------------
+    */
+
+    $token = $_POST['csrf_token'] ?? '';
+
+    if (
+        empty($_SESSION['csrf_token']) ||
+        empty($token) ||
+        !hash_equals($_SESSION['csrf_token'], $token)
+    ) {
+        http_response_code(403);
+        exit('Request tidak valid. Silakan muat ulang halaman.');
+    }
+
+
     $action = $_POST['action'] ?? '';
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Request Team
+    |--------------------------------------------------------------------------
+    */
 
     if ($action === 'request_team') {
 
         $smelterId = (int) ($_POST['smelter_id'] ?? 0);
+
         $teamId = (int) ($_POST['team_id'] ?? 0);
+
         $reason = trim($_POST['reason'] ?? '');
+
 
         try {
 
-            if (!$smelterId || !$teamId) {
+            /*
+            |--------------------------------------------------------------------------
+            | Validasi input dasar
+            |--------------------------------------------------------------------------
+            */
+
+            if ($smelterId <= 0 || $teamId <= 0) {
                 throw new Exception(
                     'Smelter dan Team wajib dipilih.'
                 );
             }
+
 
             if ($reason === '') {
                 throw new Exception(
@@ -60,19 +166,92 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
 
+            if (mb_strlen($reason) > 1000) {
+                throw new Exception(
+                    'Alasan request maksimal 1000 karakter.'
+                );
+            }
+
+
             /*
             |--------------------------------------------------------------------------
-            | Pastikan Smelter ada di divisi Foreman
+            | Transaction
+            |--------------------------------------------------------------------------
+            */
+
+            $pdo->beginTransaction();
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Lock user
+            |--------------------------------------------------------------------------
+            |
+            | Pastikan user masih active saat request diproses.
+            |
+            */
+
+            $stmt = $pdo->prepare("
+                SELECT
+                    u.id,
+                    u.division_id,
+                    u.status,
+                    r.name AS role_name
+                FROM users u
+                INNER JOIN roles r
+                    ON r.id = u.role_id
+                WHERE u.id = ?
+                LIMIT 1
+                FOR UPDATE
+            ");
+
+            $stmt->execute([$userId]);
+
+            $currentUser = $stmt->fetch(PDO::FETCH_ASSOC);
+
+
+            if (!$currentUser) {
+                throw new Exception(
+                    'User tidak ditemukan.'
+                );
+            }
+
+
+            if ($currentUser['status'] !== 'active') {
+                throw new Exception(
+                    'Akun Anda tidak aktif.'
+                );
+            }
+
+
+            if ($currentUser['role_name'] !== 'foreman') {
+                throw new Exception(
+                    'Anda tidak memiliki akses untuk melakukan request ini.'
+                );
+            }
+
+
+            $divisionId = (int) $currentUser['division_id'];
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Pastikan Smelter berada di divisi Foreman
             |--------------------------------------------------------------------------
             */
 
             $stmt = $pdo->prepare("
-                SELECT id
+                SELECT
+                    id,
+                    division_id,
+                    name,
+                    status
                 FROM smelters
                 WHERE id = ?
                   AND division_id = ?
                   AND status = 'active'
                 LIMIT 1
+                FOR UPDATE
             ");
 
             $stmt->execute([
@@ -80,26 +259,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $divisionId
             ]);
 
-            if (!$stmt->fetchColumn()) {
+            $smelter = $stmt->fetch(PDO::FETCH_ASSOC);
+
+
+            if (!$smelter) {
                 throw new Exception(
-                    'Smelter tidak valid atau berbeda divisi.'
+                    'Smelter tidak valid, tidak aktif, atau berbeda divisi.'
                 );
             }
 
 
             /*
             |--------------------------------------------------------------------------
-            | Pastikan Team berada di Smelter tersebut
+            | Pastikan Team berada pada Smelter yang dipilih
             |--------------------------------------------------------------------------
             */
 
             $stmt = $pdo->prepare("
-                SELECT id
+                SELECT
+                    id,
+                    smelter_id,
+                    name,
+                    status
                 FROM teams
                 WHERE id = ?
                   AND smelter_id = ?
                   AND status = 'active'
                 LIMIT 1
+                FOR UPDATE
             ");
 
             $stmt->execute([
@@ -107,34 +294,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $smelterId
             ]);
 
-            if (!$stmt->fetchColumn()) {
+            $team = $stmt->fetch(PDO::FETCH_ASSOC);
+
+
+            if (!$team) {
                 throw new Exception(
-                    'Team tidak berada pada Smelter yang dipilih.'
+                    'Team tidak valid, tidak aktif, atau bukan milik Smelter tersebut.'
                 );
             }
 
 
             /*
             |--------------------------------------------------------------------------
-            | Pastikan belum punya Team
+            | Pastikan Team belum dimiliki
             |--------------------------------------------------------------------------
             */
 
             $stmt = $pdo->prepare("
-                SELECT id
-                FROM user_access
-                WHERE user_id = ?
-                  AND team_id = ?
-                  AND status = 'active'
+                SELECT
+                    ua.id,
+                    ua.status
+                FROM user_access ua
+                WHERE ua.user_id = ?
+                  AND ua.smelter_id = ?
+                  AND ua.team_id = ?
                 LIMIT 1
+                FOR UPDATE
             ");
 
             $stmt->execute([
                 $userId,
+                $smelterId,
                 $teamId
             ]);
 
-            if ($stmt->fetchColumn()) {
+            $existingAccess = $stmt->fetch(PDO::FETCH_ASSOC);
+
+
+            if (
+                $existingAccess &&
+                $existingAccess['status'] === 'active'
+            ) {
                 throw new Exception(
                     'Anda sudah memiliki akses ke Team tersebut.'
                 );
@@ -156,6 +356,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                   AND request_type = 'additional_team'
                   AND status = 'pending'
                 LIMIT 1
+                FOR UPDATE
             ");
 
             $stmt->execute([
@@ -164,16 +365,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $teamId
             ]);
 
-            if ($stmt->fetchColumn()) {
+            $existingRequest = $stmt->fetchColumn();
+
+
+            if ($existingRequest) {
                 throw new Exception(
-                    'Request Team tersebut masih pending.'
+                    'Request Team tersebut masih menunggu approval.'
                 );
             }
 
 
             /*
             |--------------------------------------------------------------------------
-            | Simpan request
+            | Simpan Request
             |--------------------------------------------------------------------------
             */
 
@@ -187,7 +391,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     requested_reason,
                     created_at
                 )
-                VALUES (?, ?, ?, 'additional_team', 'pending', ?, NOW())
+                VALUES (
+                    ?,
+                    ?,
+                    ?,
+                    'additional_team',
+                    'pending',
+                    ?,
+                    NOW()
+                )
             ");
 
             $stmt->execute([
@@ -198,6 +410,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
 
 
+            /*
+            |--------------------------------------------------------------------------
+            | Commit
+            |--------------------------------------------------------------------------
+            */
+
+            $pdo->commit();
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Redirect
+            |--------------------------------------------------------------------------
+            */
+
             header(
                 'Location: access-requests?success=requested'
             );
@@ -205,7 +432,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
 
 
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
+
+            /*
+            |--------------------------------------------------------------------------
+            | Rollback
+            |--------------------------------------------------------------------------
+            */
+
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
 
             $error = $e->getMessage();
         }
@@ -215,7 +453,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 /*
 |--------------------------------------------------------------------------
-| Semua Smelter dalam divisi Foreman
+| Ambil semua Smelter dalam divisi Foreman
 |--------------------------------------------------------------------------
 */
 
@@ -236,44 +474,54 @@ $smelters = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 /*
 |--------------------------------------------------------------------------
-| Team yang sudah dimiliki
+| Team yang sudah dimiliki Foreman
 |--------------------------------------------------------------------------
 */
 
 $stmt = $pdo->prepare("
     SELECT
         ua.id,
+        ua.smelter_id,
+        ua.team_id,
         s.name AS smelter_name,
         t.name AS team_name
     FROM user_access ua
 
-    JOIN smelters s
+    INNER JOIN smelters s
         ON s.id = ua.smelter_id
 
-    JOIN teams t
+    INNER JOIN teams t
         ON t.id = ua.team_id
 
     WHERE ua.user_id = ?
       AND ua.team_id IS NOT NULL
       AND ua.status = 'active'
+      AND s.status = 'active'
+      AND t.status = 'active'
+      AND s.division_id = ?
 
     ORDER BY s.name, t.name
 ");
 
-$stmt->execute([$userId]);
+$stmt->execute([
+    $userId,
+    $divisionId
+]);
 
 $currentTeams = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 
 /*
 |--------------------------------------------------------------------------
-| Riwayat Request
+| Riwayat Request Foreman
 |--------------------------------------------------------------------------
 */
 
 $stmt = $pdo->prepare("
     SELECT
         ar.id,
+        ar.smelter_id,
+        ar.team_id,
         s.name AS smelter_name,
         t.name AS team_name,
         ar.status,
@@ -282,19 +530,23 @@ $stmt = $pdo->prepare("
         ar.rejected_reason
     FROM access_requests ar
 
-    JOIN smelters s
+    INNER JOIN smelters s
         ON s.id = ar.smelter_id
 
-    JOIN teams t
+    INNER JOIN teams t
         ON t.id = ar.team_id
 
     WHERE ar.user_id = ?
       AND ar.request_type = 'additional_team'
+      AND s.division_id = ?
 
     ORDER BY ar.created_at DESC
 ");
 
-$stmt->execute([$userId]);
+$stmt->execute([
+    $userId,
+    $divisionId
+]);
 
 $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -322,6 +574,11 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 <body>
 
+
+<!-- =========================================================
+     NAVBAR
+========================================================== -->
+
 <nav class="navbar navbar-dark bg-dark">
 
     <div class="container-fluid">
@@ -330,12 +587,17 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
             Request Team
         </span>
 
-        <a
-            href="dashboard"
-            class="btn btn-outline-light btn-sm"
-        >
-            Dashboard
-        </a>
+
+        <div>
+
+            <a
+                href="dashboard"
+                class="btn btn-outline-light btn-sm"
+            >
+                Dashboard
+            </a>
+
+        </div>
 
     </div>
 
@@ -345,31 +607,54 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 <div class="container mt-4">
 
 
+    <!-- =====================================================
+         SUCCESS MESSAGE
+    ====================================================== -->
+
     <?php if (isset($_GET['success'])): ?>
 
         <div class="alert alert-success">
+
             Request Team berhasil dikirim.
+
         </div>
 
     <?php endif; ?>
 
+
+    <!-- =====================================================
+         ERROR MESSAGE
+    ====================================================== -->
 
     <?php if (!empty($error)): ?>
 
         <div class="alert alert-danger">
-            <?= htmlspecialchars($error) ?>
+
+            <?= htmlspecialchars(
+                $error,
+                ENT_QUOTES,
+                'UTF-8'
+            ) ?>
+
         </div>
 
     <?php endif; ?>
 
 
-    <!-- TEAM SAAT INI -->
+    <!-- =====================================================
+         TEAM SAAT INI
+    ====================================================== -->
 
     <div class="card shadow-sm mb-4">
 
         <div class="card-header">
-            <strong>Team yang Saya Miliki</strong>
+
+            <strong>
+                Team yang Saya Miliki
+            </strong>
+
         </div>
+
 
         <div class="card-body">
 
@@ -385,36 +670,53 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                     <table class="table table-bordered">
 
-                        <thead>
+                        <thead class="table-light">
 
                             <tr>
-                                <th>Smelter</th>
-                                <th>Team</th>
+
+                                <th>
+                                    Smelter
+                                </th>
+
+                                <th>
+                                    Team
+                                </th>
+
                             </tr>
 
                         </thead>
 
+
                         <tbody>
 
-                        <?php foreach ($currentTeams as $team): ?>
+                            <?php foreach ($currentTeams as $team): ?>
 
-                            <tr>
+                                <tr>
 
-                                <td>
-                                    <?= htmlspecialchars(
-                                        $team['smelter_name']
-                                    ) ?>
-                                </td>
+                                    <td>
 
-                                <td>
-                                    <?= htmlspecialchars(
-                                        $team['team_name']
-                                    ) ?>
-                                </td>
+                                        <?= htmlspecialchars(
+                                            $team['smelter_name'],
+                                            ENT_QUOTES,
+                                            'UTF-8'
+                                        ) ?>
 
-                            </tr>
+                                    </td>
 
-                        <?php endforeach; ?>
+
+                                    <td>
+
+                                        <?= htmlspecialchars(
+                                            $team['team_name'],
+                                            ENT_QUOTES,
+                                            'UTF-8'
+                                        ) ?>
+
+                                    </td>
+
+                                </tr>
+
+                            <?php endforeach; ?>
 
                         </tbody>
 
@@ -429,7 +731,9 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 
 
-    <!-- REQUEST FORM -->
+    <!-- =====================================================
+         REQUEST FORM
+    ====================================================== -->
 
     <div class="card shadow-sm mb-4">
 
@@ -441,9 +745,28 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         </div>
 
+
         <div class="card-body">
 
-            <form method="POST">
+            <form
+                method="POST"
+                autocomplete="off"
+            >
+
+                <!-- CSRF -->
+
+                <input
+                    type="hidden"
+                    name="csrf_token"
+                    value="<?= htmlspecialchars(
+                        $csrfToken,
+                        ENT_QUOTES,
+                        'UTF-8'
+                    ) ?>"
+                >
+
+
+                <!-- ACTION -->
 
                 <input
                     type="hidden"
@@ -451,6 +774,8 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     value="request_team"
                 >
 
+
+                <!-- DIVISI -->
 
                 <div class="mb-3">
 
@@ -466,17 +791,25 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     >
 
                     <small class="text-muted">
+
                         Divisi tidak dapat diganti.
+
                     </small>
 
                 </div>
 
 
+                <!-- SMELTER -->
+
                 <div class="mb-3">
 
-                    <label class="form-label">
+                    <label
+                        for="smelter_id"
+                        class="form-label"
+                    >
                         Smelter
                     </label>
+
 
                     <select
                         name="smelter_id"
@@ -489,14 +822,19 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                             -- Pilih Smelter --
                         </option>
 
+
                         <?php foreach ($smelters as $smelter): ?>
 
                             <option
                                 value="<?= (int) $smelter['id'] ?>"
                             >
+
                                 <?= htmlspecialchars(
-                                    $smelter['name']
+                                    $smelter['name'],
+                                    ENT_QUOTES,
+                                    'UTF-8'
                                 ) ?>
+
                             </option>
 
                         <?php endforeach; ?>
@@ -506,11 +844,17 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 </div>
 
 
+                <!-- TEAM -->
+
                 <div class="mb-3">
 
-                    <label class="form-label">
+                    <label
+                        for="team_id"
+                        class="form-label"
+                    >
                         Team
                     </label>
+
 
                     <select
                         name="team_id"
@@ -528,21 +872,36 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 </div>
 
 
+                <!-- ALASAN -->
+
                 <div class="mb-3">
 
-                    <label class="form-label">
+                    <label
+                        for="reason"
+                        class="form-label"
+                    >
                         Alasan
                     </label>
 
+
                     <textarea
                         name="reason"
+                        id="reason"
                         class="form-control"
                         rows="4"
+                        maxlength="1000"
                         required
                     ></textarea>
 
+
+                    <div class="form-text">
+                        Maksimal 1000 karakter.
+                    </div>
+
                 </div>
 
+
+                <!-- SUBMIT -->
 
                 <button
                     type="submit"
@@ -558,7 +917,9 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 
 
-    <!-- HISTORY -->
+    <!-- =====================================================
+         HISTORY
+    ====================================================== -->
 
     <div class="card shadow-sm">
 
@@ -570,6 +931,7 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         </div>
 
+
         <div class="card-body">
 
             <div class="table-responsive">
@@ -580,18 +942,37 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                         <tr>
 
-                            <th>Smelter</th>
-                            <th>Team</th>
-                            <th>Status</th>
-                            <th>Alasan</th>
-                            <th>Tanggal</th>
-                            <th>Keterangan</th>
+                            <th>
+                                Smelter
+                            </th>
+
+                            <th>
+                                Team
+                            </th>
+
+                            <th>
+                                Status
+                            </th>
+
+                            <th>
+                                Alasan
+                            </th>
+
+                            <th>
+                                Tanggal
+                            </th>
+
+                            <th>
+                                Keterangan
+                            </th>
 
                         </tr>
 
                     </thead>
 
+
                     <tbody>
+
 
                     <?php if (!$requests): ?>
 
@@ -601,75 +982,157 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                 colspan="6"
                                 class="text-center text-muted"
                             >
+
                                 Belum ada request.
+
                             </td>
 
                         </tr>
+
+                    <?php else: ?>
+
+
+                        <?php foreach ($requests as $request): ?>
+
+                            <tr>
+
+
+                                <!-- SMELTER -->
+
+                                <td>
+
+                                    <?= htmlspecialchars(
+                                        $request['smelter_name'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    ) ?>
+
+                                </td>
+
+
+                                <!-- TEAM -->
+
+                                <td>
+
+                                    <?= htmlspecialchars(
+                                        $request['team_name'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    ) ?>
+
+                                </td>
+
+
+                                <!-- STATUS -->
+
+                                <td>
+
+                                    <?php if (
+                                        $request['status'] === 'pending'
+                                    ): ?>
+
+                                        <span class="badge bg-warning text-dark">
+                                            Pending
+                                        </span>
+
+
+                                    <?php elseif (
+                                        $request['status'] === 'approved'
+                                    ): ?>
+
+                                        <span class="badge bg-success">
+                                            Approved
+                                        </span>
+
+
+                                    <?php elseif (
+                                        $request['status'] === 'rejected'
+                                    ): ?>
+
+                                        <span class="badge bg-danger">
+                                            Rejected
+                                        </span>
+
+
+                                    <?php elseif (
+                                        $request['status'] === 'cancelled'
+                                    ): ?>
+
+                                        <span class="badge bg-secondary">
+                                            Cancelled
+                                        </span>
+
+
+                                    <?php else: ?>
+
+                                        <span class="badge bg-secondary">
+                                            <?= htmlspecialchars(
+                                                $request['status'],
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            ) ?>
+                                        </span>
+
+                                    <?php endif; ?>
+
+                                </td>
+
+
+                                <!-- ALASAN -->
+
+                                <td>
+
+                                    <?= htmlspecialchars(
+                                        $request['requested_reason'] ?? '-',
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    ) ?>
+
+                                </td>
+
+
+                                <!-- TANGGAL -->
+
+                                <td>
+
+                                    <?= htmlspecialchars(
+                                        $request['created_at'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    ) ?>
+
+                                </td>
+
+
+                                <!-- KETERANGAN -->
+
+                                <td>
+
+                                    <?php if (
+                                        $request['status'] === 'rejected'
+                                        && !empty($request['rejected_reason'])
+                                    ): ?>
+
+                                        <?= htmlspecialchars(
+                                            $request['rejected_reason'],
+                                            ENT_QUOTES,
+                                            'UTF-8'
+                                        ) ?>
+
+                                    <?php else: ?>
+
+                                        -
+
+                                    <?php endif; ?>
+
+                                </td>
+
+                            </tr>
+
+                        <?php endforeach; ?>
+
 
                     <?php endif; ?>
-
-
-                    <?php foreach ($requests as $request): ?>
-
-                        <tr>
-
-                            <td>
-                                <?= htmlspecialchars(
-                                    $request['smelter_name']
-                                ) ?>
-                            </td>
-
-                            <td>
-                                <?= htmlspecialchars(
-                                    $request['team_name']
-                                ) ?>
-                            </td>
-
-                            <td>
-
-                                <?php if ($request['status'] === 'pending'): ?>
-
-                                    <span class="badge bg-warning text-dark">
-                                        Pending
-                                    </span>
-
-                                <?php elseif ($request['status'] === 'approved'): ?>
-
-                                    <span class="badge bg-success">
-                                        Approved
-                                    </span>
-
-                                <?php elseif ($request['status'] === 'rejected'): ?>
-
-                                    <span class="badge bg-danger">
-                                        Rejected
-                                    </span>
-
-                                <?php endif; ?>
-
-                            </td>
-
-                            <td>
-                                <?= htmlspecialchars(
-                                    $request['requested_reason'] ?? '-'
-                                ) ?>
-                            </td>
-
-                            <td>
-                                <?= htmlspecialchars(
-                                    $request['created_at']
-                                ) ?>
-                            </td>
-
-                            <td>
-                                <?= htmlspecialchars(
-                                    $request['rejected_reason'] ?? '-'
-                                ) ?>
-                            </td>
-
-                        </tr>
-
-                    <?php endforeach; ?>
 
                     </tbody>
 
@@ -686,14 +1149,25 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 <script>
 
-document.getElementById('smelter_id').addEventListener(
+/*
+|--------------------------------------------------------------------------
+| Load Team berdasarkan Smelter
+|--------------------------------------------------------------------------
+*/
+
+const smelterSelect =
+    document.getElementById('smelter_id');
+
+const teamSelect =
+    document.getElementById('team_id');
+
+
+smelterSelect.addEventListener(
     'change',
     function () {
 
         const smelterId = this.value;
 
-        const teamSelect =
-            document.getElementById('team_id');
 
         teamSelect.innerHTML =
             '<option value="">Loading...</option>';
@@ -713,7 +1187,18 @@ document.getElementById('smelter_id').addEventListener(
             + encodeURIComponent(smelterId)
         )
 
-        .then(response => response.json())
+        .then(response => {
+
+            if (!response.ok) {
+                throw new Error(
+                    'HTTP ' + response.status
+                );
+            }
+
+            return response.json();
+
+        })
+
 
         .then(data => {
 
@@ -721,7 +1206,10 @@ document.getElementById('smelter_id').addEventListener(
                 '<option value="">-- Pilih Team --</option>';
 
 
-            if (!data.success) {
+            if (
+                !data.success ||
+                !Array.isArray(data.data)
+            ) {
 
                 teamSelect.innerHTML =
                     '<option value="">Team tidak tersedia</option>';
@@ -745,6 +1233,7 @@ document.getElementById('smelter_id').addEventListener(
 
         })
 
+
         .catch(error => {
 
             console.error(error);
@@ -758,6 +1247,7 @@ document.getElementById('smelter_id').addEventListener(
 );
 
 </script>
+
 
 </body>
 </html>
