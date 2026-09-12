@@ -1,35 +1,136 @@
 <?php
 
+declare(strict_types=1);
+
+/*
+|--------------------------------------------------------------------------
+| API: Get Register Teams
+|--------------------------------------------------------------------------
+| Mengambil daftar Team aktif berdasarkan Smelter aktif.
+|
+| Endpoint:
+|   /api/get-register-teams?smelter_id=1
+|
+| API ini PUBLIC karena digunakan pada halaman registrasi
+| sebelum user melakukan login.
+|--------------------------------------------------------------------------
+*/
+
 header('Content-Type: application/json; charset=utf-8');
 
-require_once __DIR__ . '/../config/database.php';
+/*
+|--------------------------------------------------------------------------
+| JSON RESPONSE HELPER
+|--------------------------------------------------------------------------
+*/
+function apiJsonResponse(
+    bool $success,
+    string $message = '',
+    array $data = [],
+    int $httpStatus = 200
+): void {
+    http_response_code($httpStatus);
 
-try {
-
-    $smelterId = filter_input(
-        INPUT_GET,
-        'smelter_id',
-        FILTER_VALIDATE_INT
+    echo json_encode(
+        [
+            'success' => $success,
+            'message' => $message,
+            'data'    => $data
+        ],
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     );
 
-    if (!$smelterId) {
+    exit;
+}
 
-        echo json_encode([
-            'success' => false,
-            'message' => 'Smelter tidak valid.'
-        ]);
+/*
+|--------------------------------------------------------------------------
+| METHOD CHECK
+|--------------------------------------------------------------------------
+| Endpoint ini hanya menerima GET.
+|--------------------------------------------------------------------------
+*/
+if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+    apiJsonResponse(
+        false,
+        'Method tidak diizinkan.',
+        [],
+        405
+    );
+}
 
-        exit;
-    }
+/*
+|--------------------------------------------------------------------------
+| LOAD DATABASE
+|--------------------------------------------------------------------------
+*/
+try {
+
+    require_once __DIR__ . '/../config/database.php';
+
+} catch (Throwable $e) {
+
+    /*
+     * Detail error database tidak boleh dikirim ke browser.
+     */
+    error_log(
+        'API get-register-teams database load error: ' .
+        $e->getMessage()
+    );
+
+    apiJsonResponse(
+        false,
+        'Terjadi kesalahan server.',
+        [],
+        500
+    );
+}
+
+/*
+|--------------------------------------------------------------------------
+| VALIDATE SMELTER ID
+|--------------------------------------------------------------------------
+*/
+$smelterId = filter_input(
+    INPUT_GET,
+    'smelter_id',
+    FILTER_VALIDATE_INT
+);
+
+if (
+    $smelterId === false ||
+    $smelterId === null ||
+    $smelterId <= 0
+) {
+    apiJsonResponse(
+        false,
+        'Smelter ID tidak valid.',
+        [],
+        400
+    );
+}
+
+/*
+|--------------------------------------------------------------------------
+| DATABASE PROCESS
+|--------------------------------------------------------------------------
+*/
+try {
 
     /*
     |--------------------------------------------------------------------------
-    | Pastikan Smelter aktif
+    | VALIDASI SMELTER
+    |--------------------------------------------------------------------------
+    | Smelter harus:
+    | - ada
+    | - aktif
     |--------------------------------------------------------------------------
     */
-
     $stmt = $pdo->prepare("
-        SELECT id
+        SELECT
+            id,
+            division_id,
+            name
         FROM smelters
         WHERE id = ?
           AND status = 'active'
@@ -40,22 +141,26 @@ try {
         $smelterId
     ]);
 
-    if (!$stmt->fetch()) {
+    $smelter = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        echo json_encode([
-            'success' => false,
-            'message' => 'Smelter tidak ditemukan atau tidak aktif.'
-        ]);
-
-        exit;
+    if (!$smelter) {
+        apiJsonResponse(
+            false,
+            'Smelter tidak ditemukan atau tidak aktif.',
+            [],
+            404
+        );
     }
 
     /*
     |--------------------------------------------------------------------------
-    | Ambil Team aktif
+    | AMBIL TEAM AKTIF
+    |--------------------------------------------------------------------------
+    | Team harus:
+    | - aktif
+    | - benar-benar milik Smelter yang diminta
     |--------------------------------------------------------------------------
     */
-
     $stmt = $pdo->prepare("
         SELECT
             id,
@@ -72,17 +177,74 @@ try {
 
     $teams = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    echo json_encode([
-        'success' => true,
-        'data' => $teams
-    ]);
+    /*
+    |--------------------------------------------------------------------------
+    | NORMALISASI RESPONSE
+    |--------------------------------------------------------------------------
+    | Pastikan ID selalu dikembalikan sebagai integer.
+    |--------------------------------------------------------------------------
+    */
+    foreach ($teams as &$team) {
+
+        $team['id'] = (int) $team['id'];
+        $team['name'] = (string) $team['name'];
+
+    }
+
+    unset($team);
+
+    /*
+    |--------------------------------------------------------------------------
+    | RESPONSE SUCCESS
+    |--------------------------------------------------------------------------
+    | Tidak ada Team aktif bukan error server.
+    | Tetap success dengan data [].
+    |--------------------------------------------------------------------------
+    */
+    apiJsonResponse(
+        true,
+        'Data Team berhasil dimuat.',
+        $teams,
+        200
+    );
+
+} catch (PDOException $e) {
+
+    /*
+    |--------------------------------------------------------------------------
+    | DATABASE ERROR
+    |--------------------------------------------------------------------------
+    | Detail SQL tidak dikirim ke browser.
+    |--------------------------------------------------------------------------
+    */
+    error_log(
+        'API get-register-teams database error: ' .
+        $e->getMessage()
+    );
+
+    apiJsonResponse(
+        false,
+        'Terjadi kesalahan database.',
+        [],
+        500
+    );
 
 } catch (Throwable $e) {
 
-    http_response_code(500);
+    /*
+    |--------------------------------------------------------------------------
+    | UNEXPECTED ERROR
+    |--------------------------------------------------------------------------
+    */
+    error_log(
+        'API get-register-teams unexpected error: ' .
+        $e->getMessage()
+    );
 
-    echo json_encode([
-        'success' => false,
-        'message' => 'Gagal mengambil data Team.'
-    ]);
+    apiJsonResponse(
+        false,
+        'Terjadi kesalahan server.',
+        [],
+        500
+    );
 }

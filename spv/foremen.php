@@ -225,24 +225,99 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             /*
             |------------------------------------------------------------------
-            | Team wajib valid dan milik Smelter request
+            | LOCK USER, SMELTER, DAN TEAM
+            |------------------------------------------------------------------
+            | Data pada JOIN di atas adalah snapshot awal. Lock dan baca ulang
+            | object penting di dalam transaksi agar approval tidak memakai
+            | status/role/divisi yang sudah berubah karena request bersamaan.
             |------------------------------------------------------------------
             */
 
-            if (empty($request['team_id'])) {
+            $stmt = $pdo->prepare("
+                SELECT
+                    id,
+                    role_id,
+                    status,
+                    division_id
+                FROM users
+                WHERE id = ?
+                LIMIT 1
+                FOR UPDATE
+            ");
+            $stmt->execute([$request['user_id']]);
+            $lockedUser = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$lockedUser) {
+                throw new Exception('Data Foreman tidak ditemukan.');
+            }
+
+            if ((int) $lockedUser['role_id'] !== $foremanRoleId) {
+                throw new Exception('User yang diproses bukan Foreman.');
+            }
+
+            if ($lockedUser['status'] !== 'pending') {
+                throw new Exception('Status Foreman sudah berubah.');
+            }
+
+            if ((int) $lockedUser['division_id'] !== $divisionId) {
+                throw new Exception('Foreman berasal dari divisi yang berbeda.');
+            }
+
+            $stmt = $pdo->prepare("
+                SELECT
+                    id,
+                    division_id,
+                    status
+                FROM smelters
+                WHERE id = ?
+                LIMIT 1
+                FOR UPDATE
+            ");
+            $stmt->execute([$request['smelter_id']]);
+            $lockedSmelter = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$lockedSmelter) {
+                throw new Exception('Smelter tujuan tidak ditemukan.');
+            }
+
+            if ($lockedSmelter['status'] !== 'active') {
+                throw new Exception('Smelter tujuan tidak aktif.');
+            }
+
+            if ((int) $lockedSmelter['division_id'] !== $divisionId) {
+                throw new Exception('Request berada di luar divisi Anda.');
+            }
+
+            $stmt = $pdo->prepare("
+                SELECT
+                    id,
+                    smelter_id,
+                    status
+                FROM teams
+                WHERE id = ?
+                LIMIT 1
+                FOR UPDATE
+            ");
+            $stmt->execute([$request['team_id']]);
+            $lockedTeam = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$lockedTeam) {
                 throw new Exception('Team Foreman tidak ditemukan.');
             }
 
-            if (
-                empty($request['team_smelter_id']) ||
-                (int) $request['team_smelter_id'] !== (int) $request['smelter_id']
-            ) {
+            if ((int) $lockedTeam['smelter_id'] !== (int) $lockedSmelter['id']) {
                 throw new Exception('Team tidak berada pada Smelter yang dipilih.');
             }
 
-            if ($request['team_status'] !== 'active') {
+            if ($lockedTeam['status'] !== 'active') {
                 throw new Exception('Team tujuan tidak aktif.');
             }
+
+            /*
+            |------------------------------------------------------------------
+            | Team wajib valid dan milik Smelter request
+            |------------------------------------------------------------------
+            */
 
             /*
             |------------------------------------------------------------------

@@ -55,6 +55,52 @@ function e(?string $value): string
 
 /*
 |--------------------------------------------------------------------------
+| LOCK + LOAD USER FOR WRITE OPERATIONS
+|--------------------------------------------------------------------------
+*/
+
+function loadUserForUpdate(PDO $pdo, int $userId): array
+{
+    $stmt = $pdo->prepare("
+        SELECT
+            u.id,
+            u.nik,
+            u.name,
+            u.email,
+            u.status,
+            u.division_id,
+            r.name AS role_name,
+            d.name AS division_name
+        FROM users u
+        INNER JOIN roles r
+            ON r.id = u.role_id
+        LEFT JOIN divisions d
+            ON d.id = u.division_id
+        WHERE u.id = ?
+        LIMIT 1
+        FOR UPDATE
+    ");
+
+    $stmt->execute([$userId]);
+
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$user) {
+        throw new Exception('User tidak ditemukan.');
+    }
+
+    if (strtolower($user['role_name']) === 'admin') {
+        throw new Exception(
+            'Akses manual untuk user Admin tidak diperbolehkan.'
+        );
+    }
+
+    return $user;
+}
+
+
+/*
+|--------------------------------------------------------------------------
 | AMBIL DATA USER
 |--------------------------------------------------------------------------
 */
@@ -164,6 +210,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         $pdo->beginTransaction();
 
+                        $user = loadUserForUpdate($pdo, $userId);
+
+                        if ($user['role_name'] !== 'spv') {
+                            throw new Exception('Aksi ini hanya untuk user SPV.');
+                        }
+
+                        if ($user['status'] !== 'active') {
+                            throw new Exception(
+                                'User harus berstatus Active untuk diberikan akses.'
+                            );
+                        }
+
 
                         /*
                         |--------------------------------------------------------------------------
@@ -183,6 +241,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 ON d.id = s.division_id
                             WHERE s.id = ?
                             LIMIT 1
+                            FOR UPDATE
                         ");
 
                         $stmt->execute([
@@ -250,6 +309,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                               AND smelter_id = ?
                               AND team_id IS NULL
                             LIMIT 1
+                            FOR UPDATE
                         ");
 
                         $stmt->execute([
@@ -306,6 +366,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $userId
                             ]);
 
+                            if ($stmt->rowCount() !== 1) {
+                                throw new Exception(
+                                    'Akses Smelter gagal diaktifkan kembali.'
+                                );
+                            }
+
 
                             /*
                             |--------------------------------------------------------------------------
@@ -341,6 +407,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                             $success =
                                 'Akses Smelter berhasil diaktifkan kembali.';
+
+                        } elseif ($existingAccess) {
+
+                            throw new Exception(
+                                'Status akses Smelter tidak valid.'
+                            );
 
                         } else {
 
@@ -460,6 +532,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         $pdo->beginTransaction();
 
+                        $user = loadUserForUpdate($pdo, $userId);
+
+                        if ($user['role_name'] !== 'spv') {
+                            throw new Exception('Aksi ini hanya untuk user SPV.');
+                        }
+
 
                         /*
                         |--------------------------------------------------------------------------
@@ -480,6 +558,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             WHERE ua.id = ?
                               AND ua.user_id = ?
                             LIMIT 1
+                            FOR UPDATE
                         ");
 
                         $stmt->execute([
@@ -545,6 +624,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $accessId,
                             $userId
                         ]);
+
+                        if ($stmt->rowCount() !== 1) {
+                            throw new Exception(
+                                'Akses Smelter gagal dicabut atau sudah diproses.'
+                            );
+                        }
 
 
                         /*
@@ -635,6 +720,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         $pdo->beginTransaction();
 
+                        $user = loadUserForUpdate($pdo, $userId);
+
+                        if ($user['role_name'] !== 'foreman') {
+                            throw new Exception('Aksi ini hanya untuk user Foreman.');
+                        }
+
+                        if ($user['status'] !== 'active') {
+                            throw new Exception(
+                                'User harus berstatus Active untuk diberikan akses.'
+                            );
+                        }
+
 
                         /*
                         |--------------------------------------------------------------------------
@@ -651,6 +748,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             FROM smelters s
                             WHERE s.id = ?
                             LIMIT 1
+                            FOR UPDATE
                         ");
 
                         $stmt->execute([
@@ -704,6 +802,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             FROM teams t
                             WHERE t.id = ?
                             LIMIT 1
+                            FOR UPDATE
                         ");
 
                         $stmt->execute([
@@ -770,6 +869,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                               AND smelter_id = ?
                               AND team_id = ?
                             LIMIT 1
+                            FOR UPDATE
                         ");
 
                         $stmt->execute([
@@ -827,6 +927,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $userId
                             ]);
 
+                            if ($stmt->rowCount() !== 1) {
+                                throw new Exception(
+                                    'Akses Team gagal diaktifkan kembali.'
+                                );
+                            }
+
 
                             /*
                             |--------------------------------------------------------------------------
@@ -864,6 +970,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                             $success =
                                 'Akses Team berhasil diaktifkan kembali.';
+
+                        } elseif ($existingAccess) {
+
+                            throw new Exception(
+                                'Status akses Team tidak valid.'
+                            );
 
                         } else {
 
@@ -986,6 +1098,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         $pdo->beginTransaction();
 
+                        $user = loadUserForUpdate($pdo, $userId);
+
+                        if ($user['role_name'] !== 'foreman') {
+                            throw new Exception('Aksi ini hanya untuk user Foreman.');
+                        }
+
 
                         /*
                         |--------------------------------------------------------------------------
@@ -1006,9 +1124,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 ON s.id = ua.smelter_id
                             LEFT JOIN teams t
                                 ON t.id = ua.team_id
+                               AND t.smelter_id = ua.smelter_id
                             WHERE ua.id = ?
                               AND ua.user_id = ?
                             LIMIT 1
+                            FOR UPDATE
                         ");
 
                         $stmt->execute([
@@ -1034,6 +1154,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if ($access['team_id'] === null) {
                             throw new Exception(
                                 'Record tersebut bukan akses Team Foreman.'
+                            );
+                        }
+
+                        if (empty($access['team_name'])) {
+                            throw new Exception(
+                                'Team pada record akses tidak valid atau tidak sesuai dengan Smelter.'
                             );
                         }
 
@@ -1074,6 +1200,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $accessId,
                             $userId
                         ]);
+
+                        if ($stmt->rowCount() !== 1) {
+                            throw new Exception(
+                                'Akses Team gagal dicabut atau sudah diproses.'
+                            );
+                        }
 
 
                         /*
@@ -1219,6 +1351,7 @@ $stmt = $pdo->prepare("
 
     LEFT JOIN teams t
         ON t.id = ua.team_id
+       AND t.smelter_id = ua.smelter_id
 
     LEFT JOIN users granted
         ON granted.id = ua.granted_by
